@@ -202,6 +202,7 @@ tmp/
 # Local strategy / private notes & session scaffolding (never in the public repo)
 # Claude Code tooling — kept locally for development, never published
 CLAUDE.md
+AGENTS.md
 .clinerules
 docs/deep-refactor/
 20260620_obsidian-mcp-connector_MCPB-generator_architecture_v1.md
