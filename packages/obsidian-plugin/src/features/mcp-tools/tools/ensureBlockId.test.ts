@@ -272,3 +272,50 @@ describe("ensure_block_id", () => {
     });
   });
 });
+
+describe("ensure_block_id: frontmatter and CRLF", () => {
+  test("a line inside the frontmatter is refused and the file is left alone", async () => {
+    for (const line of [0, 1, 2]) {
+      setMockFile("n.md", NOTE);
+      const { r, data, content } = await run({ path: "n.md", line });
+      expect(r.isError).toBe(true);
+      expect(data).toMatchObject({
+        errorCode: "invalid_params",
+        path: "n.md",
+        line,
+      });
+      expect(content).toBe(NOTE);
+    }
+  });
+
+  test("the first body line after the frontmatter is still addressable", async () => {
+    setMockFile("n.md", NOTE);
+    const { r } = await run({ path: "n.md", line: 5, id: "intro" });
+    expect(r.isError).toBeUndefined();
+  });
+
+  test("an unclosed frontmatter fence is not frontmatter", async () => {
+    setMockFile("n.md", "---\nplain text\nmore");
+    const { r, content } = await run({ path: "n.md", line: 1, id: "abc" });
+    expect(r.isError).toBeUndefined();
+    expect(content).toBe("---\nplain text\nmore ^abc");
+  });
+
+  test("on a CRLF note an inline id keeps the carriage return", async () => {
+    const crlf = NOTE.replace(/\n/g, "\r\n");
+    setMockFile("n.md", crlf);
+    const { r, content } = await run({ path: "n.md", line: 6, id: "tail" });
+    expect(r.isError).toBeUndefined();
+    expect(content).toContain("intro line two ^tail\r\n");
+    expect(content).not.toMatch(/(?<!\r)\n/);
+  });
+
+  test("on a CRLF note an own-line id and its blank lines carry the carriage return too", async () => {
+    const crlf = NOTE.replace(/\n/g, "\r\n");
+    setMockFile("n.md", crlf);
+    const { r, content } = await run({ path: "n.md", line: 15, id: "tbl" });
+    expect(r.isError).toBeUndefined();
+    expect(content).toContain("| 1 | 2 |\r\n\r\n^tbl\r\n");
+    expect(content).not.toMatch(/(?<!\r)\n/);
+  });
+});

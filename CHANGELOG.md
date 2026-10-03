@@ -5,6 +5,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), version
 
 ## [Unreleased]
 
+### Fixed
+
+- **`ensure_block_id` no longer writes into the YAML frontmatter.** A `line` inside the leading `---` block used to attach the id to the closing delimiter and corrupt the note. It is now refused with `invalid_params`, and the file is left untouched.
+- **CRLF notes work with the task and block-id tools.** `set_task_status` always answered `not_a_task` on a note with Windows line endings, and `list_tasks` fell back to the raw line (list marker included) as the task text. Both now parse the line without its carriage return and write it back with it. `ensure_block_id` also stops dropping the carriage return from the line it edits and gives the lines it inserts the file's line ending.
+- **`list_tasks` and `search_files_by_name` treat `folder: "/"` as the vault root**, as `list_attachments` already did; `list_tasks` used to return nothing for it. `search_files_by_name` now answers `folder_not_found` for a folder that does not exist instead of an empty result.
+- **`set_note_property`, `update_note_properties` and `delete_note_property` refuse non-markdown files** with `not_markdown`. Obsidian's `processFrontMatter` does nothing on them, so the tools used to report success for a write that never happened.
+
 ## [2.10.1] — 2026-10-03
 
 ### Fixed

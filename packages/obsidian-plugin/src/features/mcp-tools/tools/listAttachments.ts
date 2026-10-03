@@ -7,6 +7,7 @@ import {
   NOTE_EXTENSIONS,
   readResolvedLinks,
 } from "../services/fileKind";
+import { folderPrefix } from "../services/pathUtils";
 import { resolveTFile } from "../services/resolveTFile";
 import { errorJson, successJson } from "../services/responseBuilders";
 
@@ -134,9 +135,8 @@ export async function listAttachmentsHandler(
       attachments.push(describe(hit.file, { files: 1, references: count }));
     }
   } else {
-    const prefix =
-      folder === undefined ? null : `${folder.replace(/^\/+|\/+$/g, "")}/`;
-    if (prefix !== null && prefix !== "/") {
+    const prefix = folderPrefix(folder);
+    if (prefix !== null) {
       const dir = ctx.app.vault.getAbstractFileByPath(prefix.slice(0, -1));
       if (!dir) {
         return errorJson(`Folder not found: ${folder}`, "folder_not_found", {
@@ -158,9 +158,7 @@ export async function listAttachmentsHandler(
       .getFiles()
       .filter(isAttachment)
       .filter((f) => !isUserIgnored(f.path))
-      .filter(
-        (f) => prefix === null || prefix === "/" || f.path.startsWith(prefix),
-      )
+      .filter((f) => prefix === null || f.path.startsWith(prefix))
       .map((f) =>
         describe(f, backlinks.get(f.path) ?? { files: 0, references: 0 }),
       );

@@ -62,3 +62,30 @@ describe("taskLine", () => {
     expect(renderTaskLine(task, "x")).toBe("    - [x] call mum  ");
   });
 });
+
+describe("taskLine on CRLF lines", () => {
+  test("a carriage return from a split on newlines does not hide the task", () => {
+    expect(parseTaskLine("- [ ] buy milk\r")).toEqual({
+      prefix: "- ",
+      marker: " ",
+      text: "buy milk",
+      eol: "\r",
+    });
+    expect(parseTaskLine("- [x]\r")).toEqual({
+      prefix: "- ",
+      marker: "x",
+      text: "",
+      eol: "\r",
+    });
+  });
+
+  test("rendering gives the carriage return back", () => {
+    const task = parseTaskLine("  - [ ] write spec\r");
+    expect(task).not.toBeNull();
+    expect(renderTaskLine(task!, "x")).toBe("  - [x] write spec\r");
+  });
+
+  test("an LF line has no eol key", () => {
+    expect(parseTaskLine("- [ ] a")).not.toHaveProperty("eol");
+  });
+});

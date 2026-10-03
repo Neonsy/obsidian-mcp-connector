@@ -4,6 +4,7 @@ import {
   successJson,
   successText,
 } from "../services/responseBuilders";
+import { trimSlashes } from "../services/pathUtils";
 import type { App } from "obsidian";
 import { withVaultWriteLock } from "$/features/mcp-tools/services/vaultWriteLock";
 
@@ -47,7 +48,7 @@ export async function deleteVaultDirectoryHandler(
   structuredContent?: Record<string, unknown>;
   isError?: boolean;
 }> {
-  const trimmed = ctx.arguments.path.replace(/^\/+|\/+$/g, "");
+  const trimmed = trimSlashes(ctx.arguments.path);
   if (!trimmed) {
     return errorJson(
       "Path is empty after normalisation; refusing to delete the vault root.",

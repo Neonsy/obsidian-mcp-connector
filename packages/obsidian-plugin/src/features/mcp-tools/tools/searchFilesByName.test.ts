@@ -3,6 +3,7 @@ import {
   mockApp,
   resetMockVault,
   setMockFile,
+  setMockFolder,
   setMockIgnored,
   setMockMetadata,
 } from "$/test-setup";
@@ -22,6 +23,9 @@ const paths = (data: { results: Array<{ path: string }> }) =>
   data.results.map((x) => x.path);
 
 function seed(): void {
+  for (const folder of ["Projects", "Daily", "Archive", "Boards", "img"]) {
+    setMockFolder(folder);
+  }
   setMockFile("Projects/Meeting Notes.md", "");
   setMockFile("Projects/Roadmap 2026.md", "");
   setMockFile("Daily/2026-10-03.md", "");
@@ -122,5 +126,22 @@ describe("search_files_by_name", () => {
     const { r, data } = await run({ query: "zzzz" });
     expect(r.isError).toBeUndefined();
     expect(data).toEqual({ query: "zzzz", total: 0, results: [] });
+  });
+});
+
+describe("search_files_by_name: folder argument", () => {
+  test("a folder that does not exist is folder_not_found", async () => {
+    seed();
+    const { r, data } = await run({ query: "meeting", folder: "Nope" });
+    expect(r.isError).toBe(true);
+    expect(data).toMatchObject({ errorCode: "folder_not_found", path: "Nope" });
+  });
+
+  test("the vault root is the same as no folder", async () => {
+    seed();
+    const all = paths((await run({ query: "meeting" })).data);
+    expect(paths((await run({ query: "meeting", folder: "/" })).data)).toEqual(
+      all,
+    );
   });
 });

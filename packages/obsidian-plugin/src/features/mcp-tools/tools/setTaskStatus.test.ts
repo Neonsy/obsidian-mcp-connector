@@ -188,3 +188,16 @@ describe("set_task_status", () => {
     expect(data.errorCode).toBe("write_failed");
   });
 });
+
+describe("set_task_status on a CRLF note", () => {
+  test("ticks the box and keeps every line ending", async () => {
+    const crlf = DOC.replace(/\n/g, "\r\n");
+    setMockFile("plan.md", crlf);
+    const { r, data } = await run({ path: "plan.md", line: 1, status: "done" });
+    expect(r.isError).toBeUndefined();
+    expect(data).toMatchObject({ path: "plan.md", line: 1 });
+    expect(await content()).toBe(
+      crlf.replace("- [ ] write spec", "- [x] write spec"),
+    );
+  });
+});

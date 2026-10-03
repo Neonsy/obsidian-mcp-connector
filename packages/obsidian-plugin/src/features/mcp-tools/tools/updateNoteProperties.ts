@@ -106,6 +106,13 @@ export async function updateNotePropertiesHandler(
       : errorJson("Path is a folder, not a file", "not_a_file", { path });
   }
 
+  if (resolved.file.extension !== "md") {
+    return errorJson(`Not a markdown file: ${path}`, "not_markdown", {
+      path,
+      targetType: "file",
+    });
+  }
+
   const written: string[] = [];
   const removed: string[] = [];
   const absent: string[] = [];
