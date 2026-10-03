@@ -30,9 +30,8 @@ export async function getNotePropertiesHandler(
       ? errorJson("File not found", "file_not_found", { path })
       : errorJson("Path is a folder, not a file", "not_a_file", { path });
   }
-  const raw = ctx.app.metadataCache.getFileCache(resolved.file)?.frontmatter as
-    | Record<string, unknown>
-    | undefined;
+  const raw: Record<string, unknown> | undefined =
+    ctx.app.metadataCache.getFileCache(resolved.file)?.frontmatter;
   // Older Obsidian builds kept a `position` entry inside the cache object;
   // it is cache bookkeeping, not a property the user wrote.
   const { position: _position, ...frontmatter } = raw ?? {};

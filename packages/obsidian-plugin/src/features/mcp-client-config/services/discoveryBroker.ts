@@ -656,15 +656,18 @@ async function ensureBroker(rootDir: string, port: number): Promise<void> {
       windowsHide: true,
     },
   );
-  let spawnError: Error | null = null;
+  // A holder object, not a bare `let`: TypeScript narrows a `let` assigned
+  // only inside a callback to its initial `null`, which would type the
+  // `throw` below as `never`.
+  const spawnState: { error: Error | null } = { error: null };
   child.on("error", (error) => {
-    spawnError = error;
+    spawnState.error = error;
   });
   child.unref();
 
   for (let attempt = 0; attempt < 20; attempt += 1) {
     await new Promise((resolve) => window.setTimeout(resolve, 100));
-    const failure = spawnError;
+    const failure = spawnState.error;
     if (failure) throw failure;
     const result = await probeBroker(port);
     if (result === "healthy") return;

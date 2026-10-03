@@ -30,7 +30,7 @@ import { mock } from "bun:test";
 // infrastructure and is never bundled, so load it dynamically instead.
 const moment = (await import("moment")).default;
 
-// `window` already exists here: ../test-preload.js (plain JS, first in
+// `window` already exists here: ../scripts/test-preload.js (plain JS, first in
 // the bunfig preload list) aliases the global object as `window` before
 // any TS module loads. See that file for why the assignment lives
 // outside the TypeScript tree.
@@ -309,7 +309,7 @@ void mock.module("obsidian", () => {
       blocks?: Record<string, unknown>;
     },
     subpath: string,
-  ): unknown | null {
+  ): unknown {
     const trimmed = subpath.replace(/^#/, "").trim();
     if (trimmed === "") return null;
 

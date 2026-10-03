@@ -78,7 +78,7 @@ export async function getFileInfoHandler(ctx: GetFileInfoContext): Promise<{
   let markdown: Record<string, unknown> | null = null;
   if (kind === "markdown") {
     const cache = ctx.app.metadataCache.getFileCache(file);
-    const raw = cache?.frontmatter as FrontmatterCache | undefined;
+    const raw: FrontmatterCache | undefined = cache?.frontmatter;
     const { position: _position, ...frontmatter } = raw ?? {};
     const listItems = cache?.listItems ?? [];
     const tasks = listItems.filter((i) => typeof i.task === "string");

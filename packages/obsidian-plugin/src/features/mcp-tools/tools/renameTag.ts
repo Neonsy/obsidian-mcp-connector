@@ -171,7 +171,8 @@ export function renameFrontmatterValue(
   };
   if (Array.isArray(value)) {
     let count = 0;
-    const next = value.map((item) => {
+    const items: unknown[] = value;
+    const next = items.map((item) => {
       if (typeof item !== "string") return item;
       const r = one(item);
       if (r === null) return item;

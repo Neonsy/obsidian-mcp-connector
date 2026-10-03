@@ -32,7 +32,7 @@
 // synthetic "obsidian" module; both must have run before any transport
 // module is loaded, which is why those are pulled in dynamically further
 // down rather than imported at the top of the file.
-import "../../test-preload.js";
+import "../test-preload.js";
 import { mockApp, mockPlugin } from "../../src/test-setup";
 
 /** Port the plugin's own HTTP server binds. Not what the suite talks to. */

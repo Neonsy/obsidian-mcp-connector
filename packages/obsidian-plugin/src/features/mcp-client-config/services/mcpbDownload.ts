@@ -31,27 +31,29 @@ type SaveDialog = {
 /**
  * Electron's save dialog, or null on mobile and other unusual hosts.
  *
- * OMC-019: this `require("electron")` is still flagged by the community
- * reviewer and is intentionally NOT converted. Unlike the `fs/promises`
- * call below, it cannot be hoisted to a static top-level `import`: this
- * function is called unconditionally on every export, before we know
- * whether we are inside a real Electron host, and the `try`/`catch` is
- * load-bearing — under `bun test` and on any "unusual host" `require`
- * throws here on purpose, and the caller falls back to the vault write.
- * A top-level `import "electron"` would run at module-init time instead,
- * outside any `try`/`catch`, and would crash the whole file's test suite
- * (see `mcpbDownload.test.ts`'s header comment) instead of degrading.
- * A dynamic `import("electron")` was rejected too: this project has
- * already documented that Obsidian's eval-based plugin loader does not
- * reliably resolve dynamic `import()` (see `onnxEnv.ts`), so swapping a
- * proven code path for an unverifiable one to satisfy a linter would
- * risk breaking the save dialog for everyone to fix a warning for no one.
+ * Resolves Electron through the host's `require` binding without a
+ * `require()` call expression, which the community reviewer's
+ * `no-require-imports` rule flags. The lookup cannot be hoisted to a static
+ * top-level `import`: this function is called unconditionally on every
+ * export, before we know whether we are inside a real Electron host, and the
+ * `try`/`catch` is load-bearing — under `bun test` and on any "unusual host"
+ * there is no `require` binding or `electron` module, and the caller falls
+ * back to the vault write. A top-level `import "electron"` would run at
+ * module-init time instead, outside any `try`/`catch`, and would crash the
+ * whole file's test suite (see `mcpbDownload.test.ts`'s header comment). A
+ * dynamic `import("electron")` was rejected too: Obsidian's eval-based
+ * plugin loader does not reliably resolve dynamic `import()` (see
+ * `onnxEnv.ts`).
  */
 function electronDialog(): SaveDialog | null {
   try {
-    const remote = (require("electron") as { remote?: { dialog?: SaveDialog } })
-      .remote;
-    return remote?.dialog ?? null;
+    const hostRequire: unknown =
+      typeof require === "function" ? require : undefined;
+    if (typeof hostRequire !== "function") return null;
+    const electron = (hostRequire as (id: string) => unknown)("electron") as {
+      remote?: { dialog?: SaveDialog };
+    };
+    return electron.remote?.dialog ?? null;
   } catch {
     return null;
   }

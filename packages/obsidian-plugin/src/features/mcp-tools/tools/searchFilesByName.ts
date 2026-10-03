@@ -102,14 +102,11 @@ export async function searchFilesByNameHandler(
     if (prefix !== null && prefix !== "/" && !file.path.startsWith(prefix))
       continue;
     if (isUserIgnored(file.path)) continue;
-    const aliases =
+    const frontmatter: Record<string, unknown> | undefined =
       file.extension === "md"
-        ? fileAliases(
-            ctx.app.metadataCache.getFileCache(file)?.frontmatter as
-              | Record<string, unknown>
-              | undefined,
-          )
-        : [];
+        ? ctx.app.metadataCache.getFileCache(file)?.frontmatter
+        : undefined;
+    const aliases = file.extension === "md" ? fileAliases(frontmatter) : [];
     const hit = bestMatch(search, file, aliases);
     if (hit) hits.push(hit);
   }
