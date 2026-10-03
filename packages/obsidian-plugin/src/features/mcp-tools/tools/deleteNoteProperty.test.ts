@@ -84,3 +84,18 @@ describe("delete_note_property tool", () => {
     );
   });
 });
+
+describe("deleteNoteProperty: non-markdown files", () => {
+  test("is refused with not_markdown instead of reporting a no-op as success", async () => {
+    setMockFile("n.txt", "plain text");
+    const r = await deleteNotePropertyHandler({
+      arguments: { path: "n.txt", key: "k" },
+      app: mockApp(),
+    });
+    expect(r.isError).toBe(true);
+    expect(JSON.parse(r.content[0].text)).toMatchObject({
+      errorCode: "not_markdown",
+      path: "n.txt",
+    });
+  });
+});

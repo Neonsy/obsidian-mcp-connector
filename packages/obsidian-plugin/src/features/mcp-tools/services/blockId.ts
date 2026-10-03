@@ -21,10 +21,25 @@ export type BlockPlacement =
   | { kind: "inline"; startLine: number; endLine: number }
   | { kind: "own-line"; startLine: number; endLine: number }
   | { kind: "blank" }
+  | { kind: "frontmatter" }
   | { kind: "heading" };
 
 function isBlank(line: string): boolean {
   return line.trim().length === 0;
+}
+
+/**
+ * Index of the line that closes a leading YAML frontmatter block, or null
+ * when the file has none. Obsidian only reads frontmatter when the very
+ * first line is `---`; the block ends at the next `---` (or `...`).
+ */
+function frontmatterEnd(lines: string[]): number | null {
+  if (lines.length === 0 || lines[0].trimEnd() !== "---") return null;
+  for (let i = 1; i < lines.length; i += 1) {
+    const l = lines[i].trimEnd();
+    if (l === "---" || l === "...") return i;
+  }
+  return null;
 }
 
 /** Lines that open or close a fence, as a set of fence line indexes paired. */
@@ -47,6 +62,8 @@ function fenceRanges(lines: string[]): Array<[number, number]> {
 /** The block the target line belongs to, and how an id attaches to it. */
 export function locateBlock(lines: string[], line: number): BlockPlacement {
   const text = lines[line];
+  const fmEnd = frontmatterEnd(lines);
+  if (fmEnd !== null && line <= fmEnd) return { kind: "frontmatter" };
   if (isBlank(text)) return { kind: "blank" };
   const fence = fenceRanges(lines).find(([a, b]) => line >= a && line <= b);
   if (fence)
@@ -122,14 +139,31 @@ export function attachBlockId(
   id: string,
 ): { lines: string[]; line: number } {
   const out = [...lines];
+  // The caller splits on "\n", so a CRLF file keeps a "\r" on every line.
+  // Keep it there: trimEnd() would strip it and new lines would not carry it.
+  const crlf = lines.some((l) => l.endsWith("\r"));
+  const eol = crlf ? "\r" : "";
   if (placement.kind === "inline") {
-    out[placement.endLine] = `${out[placement.endLine].trimEnd()} ^${id}`;
+    const original = out[placement.endLine];
+    out[placement.endLine] =
+      `${original.trimEnd()} ^${id}${original.endsWith("\r") ? "\r" : ""}`;
     return { lines: out, line: placement.endLine };
   }
   const after = placement.endLine + 1;
+  const hasNext = after < out.length;
+  // The block's last line is also the file's last when there is no final
+  // newline; give it the "\r" its new successor line now needs.
+  if (crlf && !out[placement.endLine].endsWith("\r"))
+    out[placement.endLine] += "\r";
   // Blank line before, then the id, then a blank line unless one follows.
-  const needsBlankAfter = after < out.length && !isBlank(out[after]);
-  out.splice(after, 0, "", `^${id}`, ...(needsBlankAfter ? [""] : []));
+  const needsBlankAfter = hasNext && !isBlank(out[after]);
+  out.splice(
+    after,
+    0,
+    eol,
+    `^${id}${hasNext ? eol : ""}`,
+    ...(needsBlankAfter ? [eol] : []),
+  );
   return { lines: out, line: after + 1 };
 }
 

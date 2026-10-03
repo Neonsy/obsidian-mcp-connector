@@ -35,6 +35,13 @@ export async function deleteNotePropertyHandler(
   }
   const file = resolved.file;
 
+  if (file.extension !== "md") {
+    return errorJson(`Not a markdown file: ${path}`, "not_markdown", {
+      path,
+      targetType: "file",
+    });
+  }
+
   await ctx.app.fileManager.processFrontMatter(file, (rawFm) => {
     const fm = rawFm as Record<string, unknown>;
     delete fm[key];

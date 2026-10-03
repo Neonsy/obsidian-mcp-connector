@@ -1,4 +1,5 @@
 import { type } from "arktype";
+import { trimSlashes } from "../services/pathUtils";
 import { errorJson, successText } from "../services/responseBuilders";
 import type { App } from "obsidian";
 import { ensureFolderExists } from "$/features/mcp-tools/services/ensureFolderExists";
@@ -25,7 +26,7 @@ export async function createVaultDirectoryHandler(
   content: Array<{ type: "text"; text: string }>;
   isError?: boolean;
 }> {
-  const trimmed = ctx.arguments.path.replace(/^\/+|\/+$/g, "");
+  const trimmed = trimSlashes(ctx.arguments.path);
   if (!trimmed) {
     return errorJson(
       "Path is empty after normalisation; cannot create the vault root.",

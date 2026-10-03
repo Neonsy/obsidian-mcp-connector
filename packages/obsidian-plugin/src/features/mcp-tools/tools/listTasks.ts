@@ -1,6 +1,7 @@
 import { type } from "arktype";
 import type { App, TFile } from "obsidian";
 import { createExclusionFilter } from "$/shared/isUserIgnored";
+import { folderPrefix } from "../services/pathUtils";
 import { resolveTFile } from "../services/resolveTFile";
 import { errorJson, successJson } from "../services/responseBuilders";
 import { parseTaskLine, taskStatus } from "../services/taskLine";
@@ -83,8 +84,7 @@ export async function listTasksHandler(ctx: ListTasksContext): Promise<{
     // like `get_recent_files`; the hidden-folder policy (ADR-0020) is
     // enforced underneath, on the guarded `App` this already is.
     const isUserIgnored = createExclusionFilter(ctx.app);
-    const prefix =
-      folder === undefined ? null : `${folder.replace(/^\/+|\/+$/g, "")}/`;
+    const prefix = folderPrefix(folder);
     files = ctx.app.vault
       .getMarkdownFiles()
       .filter((f) => !isUserIgnored(f.path))

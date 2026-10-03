@@ -63,6 +63,7 @@ type Outcome =
   | { kind: "ambiguous_heading"; message: string }
   | { kind: "empty_section" }
   | { kind: "blank_line" }
+  | { kind: "frontmatter_line" }
   | { kind: "heading_line" }
   | { kind: "block_id_taken"; id: string };
 
@@ -133,6 +134,10 @@ export async function ensureBlockIdHandler(ctx: EnsureBlockIdContext): Promise<{
     }
 
     const placement = locateBlock(lines, target);
+    if (placement.kind === "frontmatter") {
+      outcome = { kind: "frontmatter_line" };
+      return current;
+    }
     if (placement.kind === "blank") {
       outcome = { kind: "blank_line" };
       return current;
@@ -232,6 +237,12 @@ export async function ensureBlockIdHandler(ctx: EnsureBlockIdContext): Promise<{
     case "blank_line":
       return errorJson(
         `Line ${ctx.arguments.line} is blank; a block id needs a line with content.`,
+        "invalid_params",
+        { path, line: ctx.arguments.line },
+      );
+    case "frontmatter_line":
+      return errorJson(
+        `Line ${ctx.arguments.line} is inside the YAML frontmatter; a block id belongs on a line of the note body. Use set_note_property for frontmatter.`,
         "invalid_params",
         { path, line: ctx.arguments.line },
       );

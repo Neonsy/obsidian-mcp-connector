@@ -10,7 +10,8 @@ import {
 import { createExclusionFilter } from "$/shared/isUserIgnored";
 import { buildObsidianUri } from "../services/buildObsidianUri";
 import { NOTE_EXTENSIONS } from "../services/fileKind";
-import { successJson } from "../services/responseBuilders";
+import { folderPrefix } from "../services/pathUtils";
+import { errorJson, successJson } from "../services/responseBuilders";
 
 export const searchFilesByNameSchema = type({
   name: '"search_files_by_name"',
@@ -89,8 +90,15 @@ export async function searchFilesByNameHandler(
   const limit = ctx.arguments.limit ?? 20;
   const search = prepareFuzzySearch(query.trim());
   const isUserIgnored = createExclusionFilter(ctx.app);
-  const prefix =
-    folder === undefined ? null : `${folder.replace(/^\/+|\/+$/g, "")}/`;
+  const prefix = folderPrefix(folder);
+  if (
+    prefix !== null &&
+    !ctx.app.vault.getAbstractFileByPath(prefix.slice(0, -1))
+  ) {
+    return errorJson(`Folder not found: ${folder}`, "folder_not_found", {
+      path: folder,
+    });
+  }
 
   const hits: Hit[] = [];
   for (const file of ctx.app.vault.getFiles()) {
@@ -99,8 +107,7 @@ export async function searchFilesByNameHandler(
       !NOTE_EXTENSIONS.has(file.extension.toLowerCase())
     )
       continue;
-    if (prefix !== null && prefix !== "/" && !file.path.startsWith(prefix))
-      continue;
+    if (prefix !== null && !file.path.startsWith(prefix)) continue;
     if (isUserIgnored(file.path)) continue;
     const frontmatter: Record<string, unknown> | undefined =
       file.extension === "md"

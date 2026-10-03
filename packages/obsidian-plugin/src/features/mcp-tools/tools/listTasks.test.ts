@@ -195,3 +195,27 @@ describe("list_tasks", () => {
     ]);
   });
 });
+
+describe("list_tasks: vault root and CRLF", () => {
+  test('folder: "/" means the whole vault', async () => {
+    seed();
+    const { r, data } = await run({ folder: "/" });
+    expect(r.isError).toBeUndefined();
+    expect(data.totalTasks).toBe(5);
+  });
+
+  test("a CRLF note reports clean task text", async () => {
+    setMockFile("crlf.md", "- [ ] buy milk\r\n- [x] call mum\r\n");
+    setMockMetadata("crlf.md", {
+      listItems: [
+        { line: 0, task: " ", parent: -1 },
+        { line: 1, task: "x", parent: -1 },
+      ],
+    });
+    const { data } = await run({ path: "crlf.md" });
+    expect(data.tasks.map((t: { text: string }) => t.text)).toEqual([
+      "buy milk",
+      "call mum",
+    ]);
+  });
+});
