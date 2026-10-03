@@ -7,6 +7,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), version
 
 ### Fixed
 
+- **Copied Codex config entries include the vault name.** New connections and route resets use `obsidian_<vault>_<route-uuid>`, keeping the full UUID to distinguish vaults whose names reduce to the same words. Existing UUID-only entries gain the vault-name prefix when copied, installed or next started. Legacy vault-named entries keep their existing names, and saved names remain stable after a vault rename. URLs and credentials are unchanged, and no external config is edited automatically. After installing the readable replacement, remove the old UUID-only entry to avoid duplicate connections
+
 - **`ensure_block_id` no longer writes into the YAML frontmatter.** A `line` inside the leading `---` block used to attach the id to the closing delimiter and corrupt the note. It is now refused with `invalid_params`, and the file is left untouched.
 - **CRLF notes work with the task and block-id tools.** `set_task_status` always answered `not_a_task` on a note with Windows line endings, and `list_tasks` fell back to the raw line (list marker included) as the task text. Both now parse the line without its carriage return and write it back with it. `ensure_block_id` also stops dropping the carriage return from the line it edits and gives the lines it inserts the file's line ending.
 - **`list_tasks` and `search_files_by_name` treat `folder: "/"` as the vault root**, as `list_attachments` already did; `list_tasks` used to return nothing for it. `search_files_by_name` now answers `folder_not_found` for a folder that does not exist instead of an empty result.

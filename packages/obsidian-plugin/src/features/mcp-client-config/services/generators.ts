@@ -198,9 +198,8 @@ export function vaultNameWords(vaultName: string): string[] {
  * paste over every other one in a client that holds several. A vault name
  * with no ASCII alphanumerics falls back to plain `obsidian`.
  *
- * Codex keeps its own merged form (`codexServerId`): its vault-named
- * entries exist only for settings older than the route id, and renaming
- * them would orphan the entry already in `config.toml` (ADR-0021).
+ * New Codex keys append the full route UUID for uniqueness. Existing
+ * vault-named Codex keys retain their saved form (ADR-0021).
  */
 export function vaultServerId(vaultName: string): string {
   const words = vaultNameWords(vaultName);
