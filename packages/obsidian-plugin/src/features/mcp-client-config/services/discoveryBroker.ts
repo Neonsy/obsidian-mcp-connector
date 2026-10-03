@@ -168,13 +168,13 @@ export async function getCodexConnection(
   plugin: DiscoveryPlugin,
 ): Promise<CodexConnection | null> {
   const settings = await readSettings(plugin);
-  if (!settings) return null;
+  if (!settings?.serverId) return null;
   return {
     vaultName: plugin.app.vault.getName(),
     routeId: settings.routeId,
     accessToken: settings.accessToken,
     brokerPort: DISCOVERY_BROKER_PORT,
-    serverId: storedCodexServerId(plugin.app.vault.getName(), settings),
+    serverId: settings.serverId,
   };
 }
 
@@ -187,26 +187,19 @@ export async function enableCodexDiscovery(
   if (!tokens.some((token) => token.id === tokenId)) {
     throw new Error(`Token '${tokenId}' is no longer configured.`);
   }
-  const settings = await updateSettings(plugin, (current) => ({
-    ...current,
-    enabled: true,
-    routeId: current?.routeId ?? randomUUID(),
-    accessToken: current?.accessToken ?? generateToken(),
-    tokenId,
-    serverId: current
-      ? storedCodexServerId(plugin.app.vault.getName(), current)
-      : undefined,
-  }));
-  if (!settings.serverId) {
-    settings.serverId = codexServerId(
-      plugin.app.vault.getName(),
-      settings.routeId,
-    );
-    await updateSettings(plugin, (current) => ({
-      ...(current ?? settings),
-      serverId: settings.serverId,
-    }));
-  }
+  const settings = await updateSettings(plugin, (current) => {
+    const routeId = current?.routeId ?? randomUUID();
+    return {
+      ...current,
+      enabled: true,
+      routeId,
+      accessToken: current?.accessToken ?? generateToken(),
+      tokenId,
+      serverId: current
+        ? current.serverId
+        : codexServerId(plugin.app.vault.getName(), routeId),
+    };
+  });
   return startRuntime(plugin, settings, opts);
 }
 

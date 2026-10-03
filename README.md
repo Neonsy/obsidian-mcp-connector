@@ -401,26 +401,23 @@ Port changes and token regeneration do not require a Codex config change or anot
 2. Click **Install Codex config…** to preview and approve a one-time edit, or click **Copy Codex config** and paste the snippet yourself.
 3. Keep this vault open, then restart Codex after the initial config change.
 
-New entries include the vault name and full route UUID, such as `obsidian_my_vault_123e4567e89b42d3a456426614174000`.
-The name uses the same lowercase words joined by `_` as the other client configs, capped at 32 characters before the full UUID to leave room for readable Codex tool names.
-Names without ASCII letters or digits use `obsidian_vault_<route-uuid>`
-The UUID keeps equally named vaults separate, and the saved entry name stays stable after a vault rename
+New entries use `obsidian_<vault>_<route-uuid>`, such as `obsidian_my_vault_123e4567e89b42d3a456426614174000`.
+Vault-name words are lowercase and joined by `_`, capped at 32 characters, with `vault` as the fallback for names without ASCII letters or digits.
+The full UUID separates equally named vaults, and saved entry names survive vault renames
 
-Older UUID-only entries gain the vault name the next time you copy or install their config.
-Their existing client entries keep working because the URL and credential stay the same.
-When installing over a matching UUID-only entry, the installer previews a rename and keeps all existing settings and nested tables, including tool restrictions and approvals. If both names already exist, it refuses to change either entry and asks you to keep one and transfer its policy settings manually.
-If you paste the copied snippet by hand instead, copy any custom policy settings to it and remove the old UUID-only entry to avoid connecting to the vault twice
-Legacy vault-named entries retain their existing names, and the plugin never edits a client config automatically
+Older UUID-only names upgrade on their next enabled start after the vault location check, keeping the URL and credential unchanged. Legacy vault-named entries retain their names, and no client config is edited automatically.
+The installer previews a rename that preserves the entry and its nested settings, including tool restrictions and approvals. If both names exist, resolve them manually. Server-name references elsewhere also need a manual update.
+When pasting a snippet by hand, transfer custom policy settings and remove the old UUID-only entry for this vault to avoid duplicate connections
 
 Two Codex limits worth knowing. Codex logs `tools/list_changed` but does not refetch the catalog, so a tool promoted by `activate_tools` reaches a Codex session only after it reconnects; give a token used by Codex a non-adaptive profile (`core`, or `full`) unless the first catalog is enough. Codex also has no MCP prompts support, so the vault's `#mcp-tools-prompt` notes are invisible to it.
 
 The installer uses `$CODEX_HOME/config.toml` when `CODEX_HOME` is set.
 Otherwise, it uses `~/.codex/config.toml` only when the `~/.codex` directory exists.
-It shows the exact path and whether it will add, replace or rename the vault's `[mcp_servers.<entry-name>]` table before asking for confirmation
+It shows the exact path and whether it will add, replace or rename the vault's `[mcp_servers.<entry-name>]` table before asking for confirmation.
 Replacing an entry also removes its old nested transport settings while preserving per-tool approval settings.
-The installer creates a timestamped backup, writes atomically, and reads back the expected bytes
-It checks for changes after preview and backup, but cannot lock out unrelated editors
-It refuses unsupported tables or additional entry settings rather than deleting them, and never rolls back over an externally replaced file
+The installer creates a timestamped backup, writes atomically, and reads back the expected bytes.
+It checks for changes after preview and backup, but cannot lock out unrelated editors.
+It refuses inline or dotted server entries, unsupported tables or additional entry settings rather than deleting or duplicating them, and never rolls back over an externally replaced file.
 It permits unrelated multiline strings but refuses ambiguous entries and target entries that it cannot replace conservatively.
 Use the copy action when Codex uses a project config or a custom home that Obsidian cannot locate.
 
@@ -434,16 +431,16 @@ If Node.js is unavailable, the optional connection remains disabled and the rest
 Bun is not required at runtime.
 See [ADR-0021](docs/architecture/ADR-0021-shared-local-discovery-broker.md) for the detached-process lifecycle and accepted local port-owner risk.
 
-The connection status distinguishes connected, retrying, stopped and route-conflict states
-Routes are held in broker memory and the executable is stored outside the system temporary directory
+The connection status distinguishes connected, retrying, stopped and route-conflict states.
+Routes are held in broker memory and the executable is stored outside the system temporary directory.
 After updating an older broker, update the other open vaults and close their old connections before retrying
 
-If a vault location changes, **This vault was moved** appears under Connection. Choose it to keep the vault's Codex route
-For a copied vault, choose **Make this copy independent** in the copy. It replaces every token secret, gives the Codex connection a new route and turns off the Claude Desktop sync in that vault, without editing any client config file
-Afterwards, paste the new secrets into clients you set up by hand, install the new Codex entry and remove the old one
+If a vault location changes, **This vault was moved** appears under Connection. Choose it to keep the vault's Codex route. Copy and Install stay disabled until you confirm the move or make the copy independent.
+For a copied vault, choose **Make this copy independent** in the copy. It replaces every token secret, gives an enabled Codex connection a new route and turns off the Claude Desktop sync in that vault, without editing any client config file.
+Afterwards, paste the new secrets into clients you set up by hand and install a new Codex entry for the copy. Keep the original vault's entry.
 **Advanced resets** separates the two actions for an existing vault:
 
-- **Replace all token secrets** replaces every client token secret while preserving token labels, tool permissions and the Codex connection. Update clients where you pasted a secret by hand
+- **Replace all token secrets** replaces every client token secret while preserving token labels, tool permissions and the Codex connection. Update clients where you pasted a secret by hand. If Claude Desktop sync is on, use **Replace secret** on its token afterwards to update its config
 - **Reset Codex connection** replaces only the Codex connection address and credential. Other client token secrets and Claude Desktop sync stay the same. Install or copy the new Codex entry and remove the old one for this vault
 
 ![Copied-vault setup and the separate token-secret and Codex connection reset controls](docs/images/connection-resets.png)

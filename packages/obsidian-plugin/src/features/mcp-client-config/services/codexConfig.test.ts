@@ -64,15 +64,6 @@ describe("Codex config snippet", () => {
     expect(
       `mcp__${serverId}__create_vault_binary_file`.length,
     ).toBeLessThanOrEqual(128);
-    expect(serverId).not.toBe(
-      codexServerId(vaultName, "123e4567-e89b-42d3-a456-426614174001"),
-    );
-    const snippet = codexConfigSnippet({
-      ...connection,
-      vaultName,
-      serverId: undefined,
-    });
-    expect(snippet.split("\n")[0]).toBe(`[mcp_servers.${serverId}]`);
   });
   test("uses one stable broker URL instead of the live vault port or token", () => {
     expect(codexServerId(connection.vaultName)).toBe("obsidian_neonhades2");
@@ -111,6 +102,77 @@ describe("Codex config location", () => {
 });
 
 describe("explicit Codex config installer", () => {
+  test.each(["inline", "dotted"])(
+    "refuses %s entries under the server parent table before name migration",
+    async (form) => {
+      const oldId = `obsidian_${connection.routeId.replace(/-/g, "")}`;
+      const namedConnection = { ...connection, serverId: undefined };
+      const body =
+        form === "inline"
+          ? `'${oldId}' = { url = "http://synthetic", enabled_tools = ["read_only"], default_tools_approval_mode = "approve" }`
+          : `'${oldId}'.url = "http://synthetic"\n'${oldId}'.enabled_tools = ["read_only"]\n'${oldId}'.default_tools_approval_mode = "approve"`;
+      for (const header of [
+        "[mcp_servers]",
+        '[ "mcp_servers" ]',
+        "[ 'mcp_servers' ]",
+      ]) {
+        const previous = `model = "synthetic-model"\n${header}\n${body}\n`;
+        expect(Bun.TOML.parse(previous)).toMatchObject({
+          mcp_servers: {
+            [oldId]: {
+              enabled_tools: ["read_only"],
+              default_tools_approval_mode: "approve",
+            },
+          },
+        });
+        await fsp.writeFile(configPath, previous, "utf8");
+        await expect(
+          inspectCodexInstall(namedConnection, { configPath }),
+        ).rejects.toThrow(/inline or dotted server tables/);
+        await expect(
+          installCodexConfig(namedConnection, { configPath }),
+        ).rejects.toThrow(/inline or dotted server tables/);
+        expect(await fsp.readFile(configPath, "utf8")).toBe(previous);
+        expect(await fsp.readdir(tempDir)).toEqual(["config.toml"]);
+      }
+    },
+  );
+
+  test("permits an empty server parent table and ignores unrelated lookalikes", async () => {
+    const previous = [
+      "[mcp_servers]",
+      '# existing = { url = "http://synthetic" }',
+      "",
+      "[mcp_servers.other]",
+      'url = "http://synthetic"',
+      "",
+      "[features]",
+      "mcp_servers = { unrelated = true }",
+      "documentation = '''",
+      "[mcp_servers]",
+      'existing = { url = "http://synthetic" }',
+      "'''",
+      "",
+    ].join("\n");
+    await fsp.writeFile(configPath, previous, "utf8");
+    const preview = await inspectCodexInstall(connection, { configPath });
+    expect(preview.action).toBe("add");
+    expect(await fsp.readFile(configPath, "utf8")).toBe(previous);
+    const result = await installCodexConfig(connection, { configPath });
+    expect(result.action).toBe("add");
+    expect(await fsp.readFile(result.backupPath!, "utf8")).toBe(previous);
+    const written = await fsp.readFile(configPath, "utf8");
+    const parsed = Bun.TOML.parse(written) as {
+      mcp_servers: Record<string, unknown>;
+    };
+    expect(written.startsWith(previous)).toBe(true);
+    expect(parsed).toMatchObject(Bun.TOML.parse(previous));
+    expect(Object.keys(parsed.mcp_servers)).toEqual([
+      "other",
+      preview.serverId,
+    ]);
+  });
+
   test("refuses inline server tables and preserves additional entry policies", async () => {
     for (const previous of [
       'mcp_servers = { existing = { url = "http://localhost" } }\n',
@@ -412,7 +474,7 @@ describe("explicit Codex config installer", () => {
     expect(result.action).toBe("migrate");
     expect(
       written.startsWith(
-        `\uFEFF[mcp_servers.${namedId}] # Keep header comment`,
+        `\uFEFF[ mcp_servers.${namedId} ] # Keep header comment`,
       ),
     ).toBe(true);
     expect(written.replace(/\r\n/g, "")).not.toContain("\n");
@@ -438,6 +500,46 @@ describe("explicit Codex config installer", () => {
     expect(parsed.mcp_servers.other).toEqual({ name: oldId });
     expect(await fsp.readFile(result.backupPath!, "utf8")).toBe(previous);
   });
+
+  test.each(['a"b', String.raw`C:\x`, "read.file"])(
+    "migration preserves the spelling of nested key %s and allows later installs",
+    async (toolName) => {
+      const oldId = `obsidian_${connection.routeId.replace(/-/g, "")}`;
+      const namedConnection = { ...connection, serverId: undefined };
+      const namedId = codexServerId(connection.vaultName, connection.routeId);
+      const previous = `${codexConfigSnippet({ ...connection, serverId: oldId })}\n[ 'mcp_servers' . '${oldId}' . tools . '${toolName}' ] # Preserve this spelling\napproval_mode = "approve"\n`;
+      await fsp.writeFile(configPath, previous, "utf8");
+      const result = await installCodexConfig(namedConnection, { configPath });
+      const written = await fsp.readFile(configPath, "utf8");
+      expect(result.action).toBe("migrate");
+      expect(written).toContain(
+        `[ 'mcp_servers' . ${namedId} . tools . '${toolName}' ] # Preserve this spelling`,
+      );
+      const parsed = Bun.TOML.parse(written) as {
+        mcp_servers: Record<
+          string,
+          { tools: Record<string, { approval_mode: string }> }
+        >;
+      };
+      expect(parsed.mcp_servers[namedId].tools[toolName].approval_mode).toBe(
+        "approve",
+      );
+      expect(
+        (await inspectCodexInstall(namedConnection, { configPath })).action,
+      ).toBe("replace");
+      expect(
+        (await installCodexConfig(namedConnection, { configPath })).action,
+      ).toBe("replace");
+      const refreshed = await fsp.readFile(configPath, "utf8");
+      expect(refreshed).toContain(
+        `[ 'mcp_servers' . ${namedId} . tools . '${toolName}' ] # Preserve this spelling`,
+      );
+      expect(Bun.TOML.parse(refreshed)).toEqual(parsed);
+      expect(
+        (await installCodexConfig(namedConnection, { configPath })).action,
+      ).toBe("unchanged");
+    },
+  );
 
   test.each([
     "duplicate roots",

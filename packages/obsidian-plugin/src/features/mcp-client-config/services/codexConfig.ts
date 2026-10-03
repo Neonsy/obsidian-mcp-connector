@@ -267,19 +267,22 @@ async function assertSafeConfigPath(configPath: string): Promise<void> {
 
 type Header = {
   start: number;
-  keyStart: number;
-  keyEnd: number;
+  keyRanges: { start: number; end: number }[];
   parts: string[];
   array: boolean;
 };
 type MultilineStringRange = { start: number; end: number };
 
-function parseDottedKey(value: string): string[] | null {
+function parseDottedKey(
+  value: string,
+  ranges?: { start: number; end: number }[],
+): string[] | null {
   const parts: string[] = [];
   let cursor = 0;
   while (cursor < value.length) {
     while (/\s/.test(value[cursor] ?? "")) cursor += 1;
     if (cursor >= value.length) return null;
+    const partStart = cursor;
     const quote =
       value[cursor] === '"' || value[cursor] === "'" ? value[cursor++] : null;
     let part = "";
@@ -296,6 +299,7 @@ function parseDottedKey(value: string): string[] | null {
       cursor += part.length;
     }
     parts.push(part);
+    ranges?.push({ start: partStart, end: cursor });
     while (/\s/.test(value[cursor] ?? "")) cursor += 1;
     if (cursor === value.length) return parts;
     if (value[cursor++] !== ".") return null;
@@ -419,16 +423,16 @@ function scanTomlStructure(raw: string): {
     if (/^\s*\[/.test(text)) {
       const match = /^\s*(\[\[|\[)([^\]\r\n]+)(\]\]|\])\s*(?:#.*)?$/.exec(text);
       if (match && (match[1] === "[[") === (match[3] === "]]")) {
-        const parts = parseDottedKey(match[2]);
+        const ranges: { start: number; end: number }[] = [];
+        const parts = parseDottedKey(match[2], ranges);
         if (parts) {
+          const keyStart = line.index + textOffset + match[0].indexOf(match[2]);
           headers.push({
             start: line.index,
-            keyStart: line.index + textOffset + match[0].indexOf(match[2]),
-            keyEnd:
-              line.index +
-              textOffset +
-              match[0].indexOf(match[2]) +
-              match[2].length,
+            keyRanges: ranges.map((range) => ({
+              start: keyStart + range.start,
+              end: keyStart + range.end,
+            })),
             parts,
             array: match[1] === "[[",
           });
@@ -441,9 +445,16 @@ function scanTomlStructure(raw: string): {
       );
     }
     const opening = findMultilineStart(text);
+    const currentTable = headers[headers.length - 1]?.parts;
+    // Assignments directly under [mcp_servers] define inline or dotted entries.
+    // Refuse them before adding a named entry that would omit their policy.
     if (
-      headers.length === 0 &&
-      /^\s*(?:mcp_servers|"mcp_servers"|'mcp_servers')\s*[.=]/.test(text)
+      (headers.length === 0 &&
+        /^\s*(?:mcp_servers|"mcp_servers"|'mcp_servers')\s*[.=]/.test(text)) ||
+      (currentTable?.length === 1 &&
+        currentTable[0] === "mcp_servers" &&
+        text.trim() !== "" &&
+        !text.trimStart().startsWith("#"))
     ) {
       throw new Error(
         "Client configuration uses inline or dotted server tables. Copy the snippet instead",
@@ -514,17 +525,13 @@ function planEntryEdit(
         `Codex config contains an ambiguous entry for '${previousServerId}'. Copy the snippet and edit the file manually.`,
       );
     }
-    // Only rename headers. All transport, activation and policy values stay
-    // byte-for-byte intact, including nested tables and multiline values.
+    // Only replace the server ID token. Other key spellings and all values
+    // stay intact, including quoted nested keys and multiline values.
     let content = raw;
     for (const header of [...legacy].reverse()) {
-      const key = ["mcp_servers", serverId, ...header.parts.slice(2)]
-        .map((part) =>
-          /^[a-zA-Z0-9_-]+$/.test(part) ? part : tomlString(part),
-        )
-        .join(".");
+      const range = header.keyRanges[1];
       content =
-        content.slice(0, header.keyStart) + key + content.slice(header.keyEnd);
+        content.slice(0, range.start) + serverId + content.slice(range.end);
     }
     return { action: "migrate", content, previousServerId };
   }

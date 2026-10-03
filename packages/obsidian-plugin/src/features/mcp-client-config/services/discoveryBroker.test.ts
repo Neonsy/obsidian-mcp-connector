@@ -6,7 +6,11 @@ import http from "http";
 import { createRequire } from "module";
 import type { Socket } from "net";
 import type { DiscoveryRuntime } from "./discoveryBroker";
-import { codexConfigSnippet } from "./codexConfig";
+import {
+  codexConfigSnippet,
+  installCodexConfig,
+  inspectCodexInstall,
+} from "./codexConfig";
 import {
   disableCodexDiscovery,
   enableCodexDiscovery,
@@ -383,24 +387,35 @@ test("legacy settings retain route, credential and client entry when first bound
       },
     },
   });
-  const before = await getCodexConnection(plugin);
+  expect(await getCodexConnection(plugin)).toBeNull();
   const runtime = await startCodexDiscovery(plugin, {
     rootDir: tempDir,
     dataPath,
     ensureBroker: async () => {},
     connectRegistration,
   });
-  expect(await getCodexConnection(plugin)).toEqual(before);
-  expect(before?.serverId).toBe("obsidian_neonhades2");
+  const after = await getCodexConnection(plugin);
+  expect(after?.routeId).toBe("123e4567-e89b-42d3-a456-426614174000");
+  expect(after?.accessToken).toBe(secretFor("broker"));
+  expect(after?.serverId).toBe("obsidian_neonhades2");
   await runtime?.stop();
 });
 
 test.each(["enable", "start"])(
-  "%s gives a UUID-only entry a vault name and keeps it stable after a rename",
+  "%s upgrades a UUID-only entry through an aliased path and keeps its name after a rename",
   async (action) => {
     const routeId = "123e4567-e89b-42d3-a456-426614174000";
     const opaqueId = "obsidian_123e4567e89b42d3a456426614174000";
     const namedId = "obsidian_neonhades2_123e4567e89b42d3a456426614174000";
+    const vaultDir = path.join(tempDir, "vault");
+    const aliasDir = path.join(tempDir, "vault-alias");
+    await fsp.mkdir(vaultDir);
+    await fsp.symlink(
+      vaultDir,
+      aliasDir,
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    const resolvedPath = path.join(await fsp.realpath(vaultDir), "data.json");
     const plugin = fakePlugin({
       ...withTokens("a"),
       mcpClientConfig: {
@@ -410,18 +425,20 @@ test.each(["enable", "start"])(
           accessToken: secretFor("broker"),
           tokenId: "a",
           dataPath:
-            process.platform === "win32" ? dataPath.toLowerCase() : dataPath,
+            process.platform === "win32"
+              ? resolvedPath.toLowerCase()
+              : resolvedPath,
           serverId: opaqueId,
         },
       },
     });
     const before = await getCodexConnection(plugin);
     expect(codexConfigSnippet(before!).split("\n")[0]).toBe(
-      `[mcp_servers.${namedId}]`,
+      `[mcp_servers.${opaqueId}]`,
     );
     const opts = {
       rootDir: tempDir,
-      dataPath,
+      dataPath: path.join(aliasDir, "data.json"),
       ensureBroker: async () => {},
       connectRegistration,
     };
@@ -429,6 +446,7 @@ test.each(["enable", "start"])(
       action === "enable"
         ? await enableCodexDiscovery(plugin, "a", opts)
         : await startCodexDiscovery(plugin, opts);
+    expect(runtime?.status.locationChanged).not.toBe(true);
     const stored = plugin._data?.mcpClientConfig as {
       codexDiscovery: { serverId: string };
     };
@@ -450,37 +468,108 @@ test.each(["enable", "start"])(
   },
 );
 
-test.each(["日記", "Журнал", "---"])(
-  "a new entry for %s keeps its saved name after an ASCII vault rename",
-  async (vaultName) => {
-    const plugin = fakePlugin(withTokens("a"));
-    plugin.app.vault.getName = () => vaultName;
+test.each(["start/move", "start/reset", "enable/move", "enable/reset"])(
+  "%s preserves a copied vault's saved name until its location is resolved",
+  async (scenario) => {
+    const routeId = "123e4567-e89b-42d3-a456-426614174000";
+    const opaqueId = "obsidian_123e4567e89b42d3a456426614174000";
+    const plugin = fakePlugin({
+      ...withTokens("a"),
+      mcpClientConfig: {
+        codexDiscovery: {
+          enabled: true,
+          routeId,
+          accessToken: secretFor("broker"),
+          tokenId: "a",
+          serverId: opaqueId,
+          dataPath: "synthetic-original-location/data.json",
+        },
+      },
+    });
+    plugin.app.vault.getName = () => "Copy of Notes";
     const opts = {
       rootDir: tempDir,
       dataPath,
       ensureBroker: async () => {},
       connectRegistration,
     };
-    const first = await enableCodexDiscovery(plugin, "a", opts);
-    const before = await getCodexConnection(plugin);
-    const expectedId = `obsidian_vault_${before!.routeId.replace(/-/g, "")}`;
-    expect(before?.serverId).toBe(expectedId);
-    await first.stop();
-    plugin.app.vault.getName = () => "Journal";
-    const second = await startCodexDiscovery(plugin, opts);
+    const configPath = path.join(tempDir, "synthetic-config.toml");
+    const original = await getCodexConnection(plugin);
+    await installCodexConfig(original!, { configPath });
+    const previous = await fsp.readFile(configPath, "utf8");
+    const blocked = scenario.startsWith("enable")
+      ? await enableCodexDiscovery(plugin, "a", opts)
+      : await startCodexDiscovery(plugin, opts);
+    expect(blocked?.status.locationChanged).toBe(true);
+    expect(registrations).toHaveLength(0);
+    const unresolved = await getCodexConnection(plugin);
+    expect(unresolved?.serverId).toBe(opaqueId);
+    expect(unresolved?.routeId).toBe(routeId);
+    expect(
+      (await inspectCodexInstall(unresolved!, { configPath })).action,
+    ).toBe("unchanged");
+    expect((await installCodexConfig(unresolved!, { configPath })).action).toBe(
+      "unchanged",
+    );
+    expect(await fsp.readFile(configPath, "utf8")).toBe(previous);
+    plugin.app.vault.getName = () => "Renamed Copy";
+    expect((await getCodexConnection(plugin))?.serverId).toBe(opaqueId);
+    const resolved = scenario.endsWith("move")
+      ? await acceptDiscoveryMove(plugin, blocked!, opts)
+      : await resetDiscoveryIdentity(plugin, blocked!, opts);
     try {
-      const after = await getCodexConnection(plugin);
-      expect(after?.serverId).toBe(expectedId);
-      expect(after?.routeId).toBe(before?.routeId);
-      expect(after?.accessToken).toBe(before?.accessToken);
-      expect(codexConfigSnippet(after!).split("\n")[0]).toBe(
-        `[mcp_servers.${expectedId}]`,
+      const ready = await getCodexConnection(plugin);
+      expect(ready?.serverId).toBe(
+        `obsidian_renamed_copy_${ready!.routeId.replace(/-/g, "")}`,
       );
+      if (scenario.endsWith("move")) {
+        expect(ready?.routeId).toBe(routeId);
+        expect((await installCodexConfig(ready!, { configPath })).action).toBe(
+          "migrate",
+        );
+      } else {
+        expect(ready?.routeId).not.toBe(routeId);
+        expect((await installCodexConfig(ready!, { configPath })).action).toBe(
+          "add",
+        );
+        expect(
+          (await fsp.readFile(configPath, "utf8")).startsWith(previous),
+        ).toBe(true);
+      }
     } finally {
-      await second?.stop();
+      await resolved?.stop();
     }
   },
 );
+
+test("a new fallback entry keeps its saved name after an ASCII vault rename", async () => {
+  const plugin = fakePlugin(withTokens("a"));
+  plugin.app.vault.getName = () => "日記";
+  const opts = {
+    rootDir: tempDir,
+    dataPath,
+    ensureBroker: async () => {},
+    connectRegistration,
+  };
+  const first = await enableCodexDiscovery(plugin, "a", opts);
+  const before = await getCodexConnection(plugin);
+  const expectedId = `obsidian_vault_${before!.routeId.replace(/-/g, "")}`;
+  expect(before?.serverId).toBe(expectedId);
+  await first.stop();
+  plugin.app.vault.getName = () => "Journal";
+  const second = await startCodexDiscovery(plugin, opts);
+  try {
+    const after = await getCodexConnection(plugin);
+    expect(after?.serverId).toBe(expectedId);
+    expect(after?.routeId).toBe(before?.routeId);
+    expect(after?.accessToken).toBe(before?.accessToken);
+    expect(codexConfigSnippet(after!).split("\n")[0]).toBe(
+      `[mcp_servers.${expectedId}]`,
+    );
+  } finally {
+    await second?.stop();
+  }
+});
 
 test("real registration transport recovers after broker loss and isolates a copied vault", async () => {
   const require = createRequire(import.meta.url);

@@ -198,9 +198,7 @@ export function vaultNameWords(vaultName: string): string[] {
  * paste over every other one in a client that holds several. A vault name
  * with no ASCII alphanumerics falls back to plain `obsidian`.
  *
- * New Codex keys cap the name at 32 characters and append the full route
- * UUID for uniqueness, using `vault` when the words are empty. Existing
- * vault-named Codex keys retain their saved form (ADR-0021).
+ * Codex adds its route UUID and retains saved names (see codexServerId).
  */
 export function vaultServerId(vaultName: string): string {
   const words = vaultNameWords(vaultName);

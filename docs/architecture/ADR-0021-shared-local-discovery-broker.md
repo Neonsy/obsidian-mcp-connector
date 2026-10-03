@@ -72,19 +72,13 @@ Legacy settings contain no prior location, so a copy made before that first bind
 Later location changes require an explicit choice between keeping identity for a move and resetting identity for a copy
 Resetting identity rotates the route, broker credential and client-entry name, requiring updated client configuration
 
-New entry names use `obsidian_<vault>_<route-uuid>`, with lowercase vault-name words joined by underscores and the full route UUID without hyphens.
-The vault-name prefix is capped at 32 characters to leave room for readable Codex tool names.
-Names without ASCII letters or digits use `obsidian_vault_<route-uuid>`, distinct from legacy UUID-only entries.
-The full UUID keeps colliding vault names separate, and the saved entry name stays stable when the vault is renamed
+New names use `obsidian_<vault>_<route-uuid>`, with lowercase vault-name words joined by underscores and capped at 32 characters, followed by the full UUID without hyphens.
+Names without ASCII letters or digits use `obsidian_vault_<route-uuid>`. The UUID separates colliding names, and saved names survive vault renames
 
-Existing UUID-only entry names gain the vault-name prefix on their next enabled start, while copy and install previews also resolve that prefix before a start.
-Legacy vault-named entries and other saved names retain their existing form.
-The URL and credential remain unchanged, so old client entries keep working.
-Installing the new name renames the matching UUID-only entry and every nested table header while preserving all values, comments and policy settings.
-The confirmation names both entries before the backed-up, atomic write.
-If both names already exist, the installer refuses to merge or discard their settings and asks for a manual edit.
-Users pasting a copied snippet manually must carry over custom policy settings and remove the old UUID-only entry to avoid duplicate connections
-No reset edits another vault or an external client configuration automatically
+Known UUID-only names upgrade after the canonical settings-file location check, preserving the URL and credential. Other saved names retain their form, and legacy settings receive a name on first start.
+Copy and install use the saved name and wait for an unresolved location change to be confirmed as a move or reset as a copy.
+The confirmed installer renames only the matching entry and its nested table headers, preserving other key spellings, values, comments and policies. It refuses conflicting names instead of merging settings. Server-name references elsewhere require a manual update.
+Manual snippet installation requires transferring custom policies and removing the superseded entry for the same vault. No reset edits another vault or an external client config automatically
 
 Copying `.obsidian` also copies the vault's MCP token secrets
 A separate confirmed action rotates those secrets in one settings write while retaining token IDs, labels and tool policies
@@ -131,14 +125,14 @@ Mutually authenticated local IPC would require a different transport and credent
 ### Codex configuration
 
 Codex configuration is separate from runtime discovery.
-The settings UI always offers a copyable TOML snippet.
+The settings UI offers a copyable TOML snippet once the saved entry name is available and the vault location is resolved.
 It also offers an explicit one-time installer.
 The installer locates the user config from `CODEX_HOME` or the documented default directory, previews the path and action, and waits for confirmation.
-It backs up the file, replaces the matching MCP table and its nested transport tables, preserves per-tool approval tables, writes atomically, and reads back the expected bytes
-UUID-only entry migrations rename table headers without replacing transport or policy values
-It rejects unrecognized table headers, inline server tables and additional root-entry settings instead of discarding them
-It checks for changes after preview and again after backup, but its cooperative lock cannot make external editors participate or provide filesystem compare-and-swap
-Rollback never overwrites a concurrently replaced file
+It backs up the file, replaces the matching MCP table and its nested transport tables, preserves per-tool approval tables, writes atomically, and reads back the expected bytes.
+UUID-only entry migrations replace only the server-name key in table headers without replacing transport or policy values.
+It refuses unrecognized headers, inline or dotted server entries (including assignments under `[mcp_servers]`) and additional root-entry settings rather than discarding or duplicating them.
+It checks for changes after preview and again after backup, but its cooperative lock cannot make external editors participate or provide filesystem compare-and-swap.
+Rollback never overwrites a concurrently replaced file.
 It recovers lock files older than 30 seconds and waits for a fresh lock.
 It permits multiline strings outside the entry it owns and refuses a multiline string inside the entry it would replace.
 It also refuses ambiguous entries and unknown config locations.
