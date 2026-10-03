@@ -80,7 +80,7 @@ interface DataviewPlugin {
 function isDataviewLink(value: object): value is { path: string } {
   return (
     "path" in value &&
-    typeof (value as { path: unknown }).path === "string" &&
+    typeof value.path === "string" &&
     "embed" in value &&
     "type" in value
   );
@@ -112,7 +112,7 @@ function hasToJSON(obj: object): boolean {
 
 function flattenDataviewLinks(value: unknown, seen: WeakSet<object>): unknown {
   if (value === null || typeof value !== "object") return value;
-  const obj = value as object;
+  const obj = value;
   if (seen.has(obj)) {
     throw new TypeError("Converting circular structure to JSON");
   }

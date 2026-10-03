@@ -54,7 +54,7 @@ export function describeLeaf(
 ): WorkspaceLeafEntry {
   const view = (leaf.view ?? {}) as LeafView;
   const viewState = leaf.getViewState();
-  const state = (viewState.state ?? {}) as Record<string, unknown>;
+  const state: Record<string, unknown> = viewState.state ?? {};
   const stateFile = typeof state.file === "string" ? state.file : null;
   const stateMode = typeof state.mode === "string" ? state.mode : null;
   return {

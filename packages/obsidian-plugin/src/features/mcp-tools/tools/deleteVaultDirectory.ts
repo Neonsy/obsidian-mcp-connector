@@ -4,7 +4,7 @@ import {
   successJson,
   successText,
 } from "../services/responseBuilders";
-import type { App, TAbstractFile } from "obsidian";
+import type { App } from "obsidian";
 import { withVaultWriteLock } from "$/features/mcp-tools/services/vaultWriteLock";
 
 /** How many descendant paths a dry run lists before truncating. */
@@ -136,7 +136,7 @@ export async function deleteVaultDirectoryHandler(
         );
       }
       try {
-        await ctx.app.fileManager.trashFile(folder as TAbstractFile);
+        await ctx.app.fileManager.trashFile(folder);
       } catch (e) {
         return errorJson(
           `Failed to delete directory ${trimmed}: ${e instanceof Error ? e.message : String(e)}`,

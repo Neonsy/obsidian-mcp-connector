@@ -177,13 +177,15 @@ function normalizeProfiles(value: unknown): Record<string, TokenPolicy> {
  * valid strings — a partially-trusted history is worse than none, since
  * migration eligibility reads it as fact.
  */
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((n) => typeof n === "string");
+}
+
 function normalizeEverCalled(value: unknown): Record<string, string[]> {
   if (!isRecord(value)) return {};
   const everCalled: Record<string, string[]> = {};
   for (const [id, names] of Object.entries(value)) {
-    if (Array.isArray(names) && names.every((n) => typeof n === "string")) {
-      everCalled[id] = [...(names as string[])];
-    }
+    if (isStringArray(names)) everCalled[id] = [...names];
   }
   return everCalled;
 }

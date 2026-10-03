@@ -208,7 +208,7 @@ function simplifyAnyOfNodes(node: unknown): void {
   for (const value of Object.values(obj)) simplifyAnyOfNodes(value);
 
   if (!Array.isArray(obj.anyOf) || obj.anyOf.length === 0) return;
-  const members = obj.anyOf;
+  const members: unknown[] = obj.anyOf;
 
   if (members.length === 1) {
     const only = members[0];
@@ -233,7 +233,7 @@ function simplifyAnyOfNodes(node: unknown): void {
       Object.keys(m).length === 1,
   );
   if (isConstUnion) {
-    obj.enum = members.map((m) => (m as Record<string, unknown>).const);
+    obj.enum = members.map((m) => m.const);
     delete obj.anyOf;
   }
 }
@@ -388,9 +388,7 @@ function stripDefaultAnnotations(
     if (specDefault !== undefined && value === specDefault) continue;
     stripped[key] = value;
   }
-  return Object.keys(stripped).length > 0
-    ? (stripped as ToolAnnotations)
-    : undefined;
+  return Object.keys(stripped).length > 0 ? stripped : undefined;
 }
 
 const textResult = type({
@@ -1039,17 +1037,14 @@ export class ToolRegistryClass<
  * specific code; what lands here is unexpected, so the vocabulary is the
  * protocol's own.
  */
+const PROTOCOL_ERROR_CODE_NAMES: ReadonlyMap<number, string> = new Map([
+  [ProtocolErrorCode.InvalidParams, "invalid_params"],
+  [ProtocolErrorCode.InvalidRequest, "invalid_request"],
+  [ProtocolErrorCode.MethodNotFound, "method_not_found"],
+]);
+
 function errorCodeOf(code: number): string {
-  switch (code) {
-    case ProtocolErrorCode.InvalidParams:
-      return "invalid_params";
-    case ProtocolErrorCode.InvalidRequest:
-      return "invalid_request";
-    case ProtocolErrorCode.MethodNotFound:
-      return "method_not_found";
-    default:
-      return "internal_error";
-  }
+  return PROTOCOL_ERROR_CODE_NAMES.get(code) ?? "internal_error";
 }
 
 export type ToolRegistry = ToolRegistryClass<

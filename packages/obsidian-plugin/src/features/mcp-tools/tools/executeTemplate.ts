@@ -275,7 +275,7 @@ export async function executeTemplateHandler(
       // one the caller needs to see.
       if (targetFile !== null) {
         try {
-          await ctx.app.vault.delete(targetFile);
+          await ctx.app.fileManager.trashFile(targetFile);
         } catch {
           // The note is gone already or cannot be removed; the render error
           // below still reaches the caller.

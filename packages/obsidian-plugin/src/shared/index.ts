@@ -212,8 +212,8 @@ export function loadSmartSearchAPI(
 
   const stop = () => {
     done = true;
-    clearInterval(ticker);
-    clearTimeout(horizon);
+    window.clearInterval(ticker);
+    window.clearTimeout(horizon);
   };
   const finish = () => {
     if (done) return;
@@ -221,7 +221,7 @@ export function loadSmartSearchAPI(
     options.onComplete();
   };
 
-  const ticker = setInterval(() => {
+  const ticker = window.setInterval(() => {
     if (done) return;
     let dep: Dependencies["smart-connections"];
     try {
@@ -237,7 +237,7 @@ export function loadSmartSearchAPI(
     }
     if (typeof dep.api?.search === "function") finish();
   }, intervalMs);
-  const horizon = setTimeout(finish, timeoutMs);
+  const horizon = window.setTimeout(finish, timeoutMs);
 
   return () => {
     if (!done) stop();

@@ -44,13 +44,6 @@ export type SimpleSearchFile = {
 export type SmartSearchResult = SearchResult;
 
 /**
- * Fields of `SearchResult` deliberately NOT carried into a row. Empty today.
- * Adding a name here is how "we looked at it and the view does not need it"
- * gets recorded, rather than happening by omission.
- */
-type NotProjected = never;
-
-/**
  * Forces a decision in THIS file when `SearchResult` grows a field.
  *
  * Measured before writing it (#466), because the issue's premise was wrong:
@@ -63,16 +56,13 @@ type NotProjected = never;
  * does not fix that either — an unread field is not an error.
  *
  * This does. `Unprojected` is the set of `SearchResult` keys that reach
- * neither a row nor `NotProjected`; `Assert` then fails with the offending
+ * no row; `Assert` then fails with the offending
  * key NAME in the message rather than a generic mismatch. Type-level only:
  * nothing is emitted.
  */
 type Assert<T extends true> = T;
-type Unprojected = Exclude<
-  keyof SearchResult,
-  keyof SearchResultRow | NotProjected
->;
-type _EverySearchResultFieldIsAccountedFor = Assert<
+type Unprojected = Exclude<keyof SearchResult, keyof SearchResultRow>;
+export type EverySearchResultFieldIsAccountedFor = Assert<
   [Unprojected] extends [never] ? true : Unprojected
 >;
 
