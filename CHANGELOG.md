@@ -5,6 +5,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), version
 
 ## [Unreleased]
 
+## [2.10.1] — 2026-10-03
+
+### Fixed
+
+- **Obsidian community review warnings on 2.10.0** (#573). Removed unnecessary type assertions and unsafe `any` flows in `tokenPolicyStore`, `toolRegistry`, `renameTag` and the Dataview, file-info, note-properties, workspace-state and name-search tools. `discoveryBroker` no longer throws a value TypeScript narrowed to `never`. The `ProtocolErrorCode` switch is now a lookup. `loadSmartSearchAPI` uses `window.setInterval` and `window.setTimeout` (popout-window compatibility), and `mcpbDownload` no longer calls `require()` directly. `execute_template` now removes the empty note left by a failed render through `FileManager.trashFile`, so the cleanup follows the user's deletion preference (the note may land in the trash instead of being deleted outright). The test preload moved to `scripts/`, outside the scanner's lint scope.
+
+### Changed
+
+- **Dependency advisories cleared** (#574). `adm-zip`, `brace-expansion`, `devalue`, `hono`, `moment` and `sharp` are raised to patched versions, and the unused `@anthropic-ai/mcpb` devDependency is gone, which also removes `node-forge` (no patched release exists). None of them ships in `main.js`, so the plugin bytes did not change; `bun audit` now reports no vulnerabilities.
+- **Releases build with bun 1.4.2** (#575, was 1.3.12). The built `main.js` is byte-reproducible per bun version, and Obsidian's review reported its source rebuild as not matching the release. The new `main.js` differs only in minified identifier names.
+
 ## [2.10.0] — 2026-10-03
 
 ### Added
