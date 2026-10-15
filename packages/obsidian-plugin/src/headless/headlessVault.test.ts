@@ -5,6 +5,7 @@ import path from "node:path";
 import { deleteVaultDirectoryHandler } from "$/features/mcp-tools/tools/deleteVaultDirectory";
 import { createHeadlessApp, type HeadlessAppHandle } from "./headlessApp";
 import { HeadlessVault } from "./headlessVault";
+import { nodeMoveOps } from "./moveEntry";
 import { TFile, TFolder } from "./obsidianShim";
 import { VaultPathError } from "./vaultFs";
 
@@ -188,6 +189,47 @@ describe("process and processFrontMatter", () => {
   });
 });
 
+describe("a case-insensitive filesystem", () => {
+  /** A stat that finds a path under any spelling, as macOS and Windows do. */
+  const insensitiveLstat = async (abs: string) => {
+    const hit = await fs.promises.lstat(abs).catch(() => null);
+    if (hit) return hit;
+    const found = fs
+      .readdirSync(path.dirname(abs))
+      .find((n) => n.toLowerCase() === path.basename(abs).toLowerCase());
+    if (found === undefined) throw new Error("ENOENT");
+    return fs.promises.lstat(path.join(path.dirname(abs), found));
+  };
+
+  test("a late event for the old spelling of a renamed path adds nothing", async () => {
+    write("Note.md", "# N\n");
+    write("Dir/x.md", "x");
+    vault = await HeadlessVault.open(root, { lstat: insensitiveLstat });
+    await vault.rescan();
+
+    await vault.rename(file("Note.md"), "note.md");
+    await vault.rename(vault.getFolderByPath("Dir") as TFolder, "dir");
+    await vault.reconcile("Note.md");
+    await vault.reconcile("Dir");
+
+    expect(
+      vault
+        .getFiles()
+        .map((f) => f.path)
+        .sort(),
+    ).toEqual(["dir/x.md", "note.md"]);
+    expect(vault.getAllFolders().map((f) => f.path)).toEqual(["dir"]);
+  });
+
+  test("a new file is still indexed under its real spelling", async () => {
+    vault = await HeadlessVault.open(root, { lstat: insensitiveLstat });
+    await vault.rescan();
+    write("New.md", "n");
+    await vault.reconcile("New.md");
+    expect(vault.getFiles().map((f) => f.path)).toEqual(["New.md"]);
+  });
+});
+
 describe("confinement", () => {
   test("hostile paths are refused before touching the disk", async () => {
     await open();
@@ -197,6 +239,7 @@ describe("confinement", () => {
       "a/../../x.md",
       ".git/x",
       "a\0.md",
+      "a\nb.md",
     ]) {
       await expect(vault.create(bad, "x")).rejects.toThrow(VaultPathError);
     }
@@ -315,6 +358,64 @@ describe("trash destinations", () => {
       .map((name) => fs.readFileSync(path.join(trash, name), "utf8"))
       .sort();
     expect(contents).toEqual(["1", "2", "3"]);
+  });
+
+  test("a file that cannot be put back is reported, not trashed under another name", async () => {
+    write("a.md", "original");
+    write(".trash/a.md", "older");
+    const vault = await HeadlessVault.open(root, {
+      moveOps: {
+        ...nodeMoveOps,
+        rename: async (src, dst) => {
+          await fs.promises.rename(src, dst);
+          // An external save recreates the name right after it is captured.
+          if (path.basename(dst).endsWith(".tmp")) {
+            fs.writeFileSync(path.join(root, "a.md"), "external");
+          }
+        },
+      },
+    });
+    await vault.rescan();
+    const err = await vault
+      .trash(vault.getFileByPath("a.md") as TFile)
+      .catch((e: Error) => e);
+    expect((err as NodeJS.ErrnoException).code).toBe("ESTRANDED");
+    expect((err as Error).message).toContain(".a.md.");
+    expect((err as Error).message).not.toContain(dir);
+    expect(fs.readFileSync(path.join(root, "a.md"), "utf8")).toBe("external");
+    expect(fs.readdirSync(path.join(root, ".trash"))).toEqual(["a.md"]);
+    expect(fs.readFileSync(path.join(root, ".trash/a.md"), "utf8")).toBe(
+      "older",
+    );
+    const kept = fs.readdirSync(root).filter((n) => n.endsWith(".tmp"));
+    expect(kept.length).toBe(1);
+    expect(fs.readFileSync(path.join(root, kept[0]), "utf8")).toBe("original");
+    expect(vault.getFiles().map((f) => f.path)).toEqual(["a.md"]);
+  });
+
+  test("a temporary name that cannot be removed is reported after the file is trashed", async () => {
+    write("a.md", "original");
+    const vault = await HeadlessVault.open(root, {
+      moveOps: {
+        ...nodeMoveOps,
+        unlink: async (p) => {
+          if (p.endsWith(".tmp")) {
+            throw Object.assign(new Error("EACCES"), { code: "EACCES" });
+          }
+          await fs.promises.unlink(p);
+        },
+      },
+    });
+    await vault.rescan();
+    const err = await vault
+      .trash(vault.getFileByPath("a.md") as TFile)
+      .catch((e: Error) => e);
+    expect((err as NodeJS.ErrnoException).code).toBe("ELEFTOVER");
+    expect((err as Error).message).not.toContain(dir);
+    expect(fs.readFileSync(path.join(root, ".trash/a.md"), "utf8")).toBe(
+      "original",
+    );
+    expect(vault.getFiles()).toEqual([]);
   });
 
   test("a .trash symlink out of the vault is refused", async () => {

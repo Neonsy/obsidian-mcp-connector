@@ -21,8 +21,9 @@ What stood in the way was structural: the composition root, the transport setup 
 1. **One shared tool set, registered twice.**
    `registerVaultTools` holds the tools that need only a vault-shaped `App` and a settings host.
    The desktop `registerTools` calls it and then registers the desktop-only tools, so the desktop tool set is unchanged.
-   Headless registers the shared set alone: 42 tools plus the three adaptive-loading meta-tools.
-   Excluded in v1: `rename_vault_file`, `search_files_by_name`, `fetch`, daily and periodic notes, `search_vault_smart`, and every workspace, active-file, command, Dataview, Templater and bookmark tool.
+   Headless registers the shared set alone: 44 tools plus the three adaptive-loading meta-tools.
+   `rename_vault_file` and `search_files_by_name` are part of that set and run their desktop code unchanged (see decision 8).
+   Excluded in v1: `fetch`, daily and periodic notes, `search_vault_smart`, and every workspace, active-file, command, Dataview, Templater and bookmark tool.
 2. **Structural host, injected registrar.**
    `composeToolRegistry`, `createMcpService` and the transport setup take a registrar and a host with `app`, `manifest`, `loadData` and `saveData` instead of the plugin class.
    The server `instructions` text is a parameter, so headless does not advertise tools it lacks.
@@ -52,12 +53,49 @@ What stood in the way was structural: the composition root, the transport setup 
    `bun run build:headless` bundles everything into `packages/obsidian-plugin/dist/headless/obsidian-mcp-headless.js` as CommonJS with a `node` shebang and the executable bit, so it runs as `node obsidian-mcp-headless.js` and as an extensionless copy on `PATH` on Node 24.11 or newer, the first Node 24 LTS release, and the release workflow attaches it to each release.
    Nothing is published to a package registry.
 
+8. **File-name search and rename reuse the desktop tools.**
+   `search_files_by_name` imports `prepareFuzzySearch`, `sortSearchResults` and `parseFrontMatterAliases` from `obsidian`, and the shim now provides them.
+   Obsidian's scoring is not public, so the scorer is our own: in-order characters, scored by the cheapest alignment, where contiguous runs and word starts cost less and an earlier or tighter text ranks higher.
+   The query is folded one code point at a time like each name, so a final capital sigma matches the same name it came from.
+   Scores are at most 0 with 0 the best, and `SearchResult` and match ranges follow the public typings.
+   The tool description says the scoring is Obsidian's own on desktop only.
+   `rename_vault_file` calls `fileManager.renameFile`, which headless implements in two steps.
+   The vault moves the entry on disk and in the index as one step of the serial index queue.
+   A rename takes the whole vault: it waits for every write in flight (property writes, `process`, `modify`) and writes that arrive meanwhile wait for it, then queue under the path the file has by then.
+   So a writer never holds text read from a path that has moved, and a link rewrite is never undone by a stale write.
+   Before it picks the notes that link to the moved file, the rename applies the file events the watcher is still holding for its debounce.
+   A file is first renamed to a unique hidden name that the move owns, which captures exactly the entry being moved, so an atomic save by another program that lands at the old name afterwards is never deleted.
+   The owned file is then hard-linked to the new name (which fails atomically if the name is taken) and the owned name is removed, so a file that appeared behind the index is never replaced.
+   If the link fails the file is put back with the same exclusive link, and if that fails too the owned file stays and the error (code `ESTRANDED`, which the trash loop never mistakes for a taken name) names it.
+   Once the new name exists the move has succeeded and that name is never unlinked again, because by then it may be a different file that another program saved there.
+   If the owned name then cannot be removed it stays hidden, is never indexed, and the error says the move succeeded and names it so it can be deleted.
+   Where hard links are not available it moves onto an exclusively created empty placeholder instead, and there a save landing at the destination in the instant before the move can be replaced.
+   A folder is renamed once its destination is seen to be absent, without creating the destination first (Windows refuses that), so on POSIX the only entry a racing writer could lose is an empty directory.
+   A case-only rename (`Note.md` to `note.md`) on a case-insensitive filesystem needs no special case for a file, which has left its old name before it is linked, and is detected by comparing device and inode for a folder and done through a temporary hidden name.
+   The same path rules as every write apply to both ends (no `..`, dot-folders, symlinks, root or control characters, which could otherwise inject YAML or markdown structure into a link).
+   A rename also refuses a destination when any segment of its path (the final name or a folder above it) contains any of `[ ] | # ^`, as desktop Obsidian does, or a backtick, or starts or ends with whitespace, because a wikilink cannot escape anything: a backtick can pair with a later one into a code span that hides the link, and whitespace at either end is trimmed from every link.
+   Only the destination is checked, so existing files with those characters stay readable and can be renamed away.
+   The index keeps the same `TFile` and `TFolder` objects with their new paths, moves each cache with its file (a file that becomes a note is parsed from disk, and one that stops being a note loses its cache), keeps the signature the file had before the move so an edit made outside around the move is found by the next reconcile, recomputes link resolution once and then emits `rename` with the old path for the entry and everything below it.
+   Then every note that links to a moved file, and every moved note, is rewritten through the normal per-path write, so each write is atomic and updates the index.
+   A link is rewritten when its text no longer resolves to its old target after the move, judged by two link resolvers built over the file set before and after.
+   So `[[note]]` survives a folder rename untouched, and a relative link in a moved note is recomputed.
+   The new text keeps the link's style: relative stays relative, a bare name stays the shortest form (the name when exactly one file has it, else the full path), a full path stays a full path, and `.md`, aliases, subpaths, embed marks, link text, titles, angle brackets and URL encoding carry over.
+   A written markdown destination percent-encodes (as UTF-8) every character that is not a letter, mark, number or one of `/ . _ ~ -`, except that an ASCII space stays raw inside `<...>`, so no name can end the destination, start a subpath, read as a URL scheme (`RFC: Auth.md`), open a code span or count as whitespace, and desktop Obsidian decodes it back to the same path.
+   Positions come from the metadata cache.
+   A cache is used only when it was parsed from exactly the text being edited, otherwise the note is parsed again, so an edit made behind the index is not corrupted.
+   Frontmatter links have no position, so the frontmatter is parsed as YAML and each string value (never a key) that holds a link is replaced through its source range, spelled in its own quoting style or in a quoted style that can hold the new text.
+   The rest of the block stays byte for byte as it was, and edits that would overlap fail the note instead of corrupting it.
+   Each new link text is parsed back and resolved before it is written, and a link that no spelling leads back to its target (such as a relative link to a file left in a folder named `a#b`) is left as it was and named in the error below.
+   If the move succeeds and a note then fails to rewrite, the move stands and the error names the notes left out of date.
+   Limits: links in canvases and `.base` files are not rewritten, the link style comes from each link and not from `.obsidian/app.json` (dot-folders are never read), a link that did not resolve before the move is left as written, and on a filesystem without hard links a save landing at the destination in the instant before the move can be replaced.
+   There is no transaction across the move and the rewrites, and a change the operating system has not yet reported to the watcher when the rename starts is not seen.
+
 ## Consequences
 
 - Tool names and response shapes stay identical, so client integrations carry over.
 - The parser and the link resolver are approximations of Obsidian's.
   Differences show up in edge cases such as setext headings, footnotes and unusual tag forms, and the tests pin the behaviour the tools rely on.
-- The "Excluded files" setting has no equivalent, and `get_server_info` reports a loopback endpoint, which is correct because headless binds `127.0.0.1` only.
+- The "Excluded files" setting has no equivalent (so `search_files_by_name` omits nothing), and `get_server_info` reports a loopback endpoint, which is correct because headless binds `127.0.0.1` only.
 - Semantic search is not part of v1 and is planned.
 - The shared seams add a type parameter to the composition root and the transport setup, and the desktop tests pass the registrar explicitly.
 - The `tools/list` order on desktop now lists the shared tools first and the desktop-only tools after them.

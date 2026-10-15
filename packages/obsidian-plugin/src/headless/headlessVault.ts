@@ -10,7 +10,10 @@
  *    because `reconcile` compares a stat signature first.
  * 2. Writes to one path are serialised through a per-path queue, and each
  *    write reads fresh, then lands atomically (temp file in the same
- *    directory, then rename), so a reader never sees half a file.
+ *    directory, then rename), so a reader never sees half a file. A rename
+ *    of a file or folder takes the whole vault: it waits for every write in
+ *    flight, and writes that arrive meanwhile wait for it, so no writer
+ *    holds text read from a path that has moved.
  * 3. Every index update runs through one serial queue: a rescan, a
  *    watcher reconcile, and our own write once it is on disk, which
  *    reconciles its path. A rescan therefore never applies its listing
@@ -23,7 +26,14 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { HeadlessEvents } from "./events";
 import { HeadlessMetadataCache } from "./headlessMetadataCache";
+import {
+  moveNoReplace,
+  nodeMoveOps,
+  type MoveOps,
+  type MoveResult,
+} from "./moveEntry";
 import { TAbstractFile, TFile, TFolder } from "./obsidianShim";
+import { isLinkableName } from "./renameLinks";
 import {
   isHiddenSegment,
   normalizeVaultPath,
@@ -59,6 +69,21 @@ function errorWithCode(message: string, code: string): Error {
   return Object.assign(new Error(message), { code });
 }
 
+/** What a rename changed, for the caller that rewrites the links. */
+export type RenameResult = {
+  /** Every file that moved, old path to new path. */
+  moves: Map<string, string>;
+  /** Every file path before the move. */
+  before: string[];
+  /** Notes (by their old path) that link to a moved file, or moved themselves. */
+  linkers: string[];
+  /**
+   * Vault-relative path of a hidden temporary name of the moved file that
+   * could not be removed. The move itself succeeded.
+   */
+  leftover?: string;
+};
+
 /** Seams for tests. Production uses the defaults. */
 export type HeadlessVaultOptions = {
   /** Clock for trash names. */
@@ -69,6 +94,10 @@ export type HeadlessVaultOptions = {
   afterScanList?: () => Promise<void>;
   /** Runs each time a rescan or reconcile is requested and waits its turn. */
   onQueued?: () => void;
+  /** The stat a reconcile makes. Tests use it to act like a case-insensitive filesystem. */
+  lstat?: (abs: string) => Promise<Stats>;
+  /** The filesystem calls a move or trash makes. */
+  moveOps?: MoveOps;
 };
 
 export class HeadlessVault extends HeadlessEvents {
@@ -80,6 +109,10 @@ export class HeadlessVault extends HeadlessEvents {
   private readonly folders = new Map<string, TFolder>();
   private readonly signatures = new Map<string, string>();
   private readonly queues = new Map<string, Promise<unknown>>();
+  /** Writes in flight (they share the vault) and the rename that waits for them. */
+  private writers = 0;
+  private renaming: Promise<void> | null = null;
+  private drainWaiters: Array<() => void> = [];
   /** Tail of the serial queue every index update runs through. */
   private indexTail: Promise<unknown> = Promise.resolve();
   /** A rescan that is queued and not started yet, shared by new requests. */
@@ -91,7 +124,7 @@ export class HeadlessVault extends HeadlessEvents {
     done: Promise<void>;
   } | null = null;
   private batchDepth = 0;
-  private deferred: Array<[string, TAbstractFile]> = [];
+  private deferred: Array<[string, TAbstractFile, ...unknown[]]> = [];
 
   private constructor(
     private readonly vfs: VaultFs,
@@ -220,15 +253,21 @@ export class HeadlessVault extends HeadlessEvents {
   }
 
   modify(file: TFile, data: string): Promise<void> {
-    return this.enqueue(file.path, async () => {
-      await this.writeExisting(file, data);
-    });
+    return this.enqueue(
+      () => file.path,
+      async () => {
+        await this.writeExisting(file, data);
+      },
+    );
   }
 
   modifyBinary(file: TFile, data: ArrayBuffer): Promise<void> {
-    return this.enqueue(file.path, async () => {
-      await this.writeExisting(file, new Uint8Array(data));
-    });
+    return this.enqueue(
+      () => file.path,
+      async () => {
+        await this.writeExisting(file, new Uint8Array(data));
+      },
+    );
   }
 
   append(file: TFile, data: string): Promise<void> {
@@ -237,16 +276,19 @@ export class HeadlessVault extends HeadlessEvents {
 
   /**
    * Read the file fresh, run the synchronous callback, write the result.
-   * Nothing else can write this path between the read and the write: both
-   * happen inside the path's queue.
+   * Nothing else can write this path between the read and the write, and no
+   * rename can move it: both happen inside the path's queue.
    */
   process(file: TFile, fn: (data: string) => string): Promise<string> {
-    return this.enqueue(file.path, async () => {
-      const current = await this.read(file);
-      const next = fn(current);
-      if (next !== current) await this.writeExisting(file, next);
-      return next;
-    });
+    return this.enqueue(
+      () => file.path,
+      async () => {
+        const current = await this.read(file);
+        const next = fn(current);
+        if (next !== current) await this.writeExisting(file, next);
+        return next;
+      },
+    );
   }
 
   /**
@@ -271,9 +313,177 @@ export class HeadlessVault extends HeadlessEvents {
     await this.guard(async () => {
       const abs = await this.vfs.resolveEntry(file.path);
       const trashDir = await this.vfs.trashDir();
-      await this.moveToFreeName(abs, trashDir, file.name);
+      const { leftover } = await this.moveToFreeName(abs, trashDir, file.name);
       await this.reconcile(file.path);
+      if (leftover !== undefined) {
+        throw errorWithCode(
+          `The file was moved to the trash, but its temporary name ${this.relative(leftover)} could not be removed`,
+          "ELEFTOVER",
+        );
+      }
     });
+  }
+
+  /**
+   * Move a file or folder to `newPath` on disk and in the index, and emit
+   * `rename` for it and everything below it. Does not touch links: the
+   * result tells the caller what moved. The destination must not exist and
+   * its parent folder must. The move waits for every write in flight and
+   * holds off new ones, then takes its turn in the index queue, so it never
+   * interleaves with a rescan, a reconcile or another write.
+   */
+  rename(entry: TAbstractFile, newPath: string): Promise<RenameResult> {
+    return this.guard(() =>
+      this.exclusive(async () => {
+        // An edit made outside that the watcher has not applied yet would
+        // hide a note that links here.
+        await this.flushPending();
+        return this.serial(() => this.renameNow(entry, newPath));
+      }),
+    );
+  }
+
+  /**
+   * Settles the changes the file watcher has seen and not applied yet. The
+   * watcher sets it. A change the operating system has not reported yet
+   * cannot be known.
+   */
+  flushPending: () => Promise<void> = async () => {};
+
+  private async renameNow(
+    entry: TAbstractFile,
+    newPath: string,
+  ): Promise<RenameResult> {
+    if (entry === this.rootFolder) {
+      throw new VaultPathError("The vault root cannot be changed", "EACCES");
+    }
+    const from = normalizeVaultPath(entry.path);
+    const to = normalizeVaultPath(newPath);
+    // A name that a link cannot spell would break every link written to it,
+    // whether it names the file or a folder on its path. Desktop Obsidian
+    // refuses `[ ] | # ^` too. Only the destination is checked: files that
+    // already have such a name stay usable.
+    if (!to.split("/").every(isLinkableName)) {
+      throw new VaultPathError(
+        "A name cannot contain any of [ ] | # ^ ` or start or end with whitespace because it would break links",
+        "EINVAL",
+      );
+    }
+    const isFolder = entry instanceof TFolder;
+    const indexed = isFolder ? this.folders.get(from) : this.files.get(from);
+    if (indexed !== entry) {
+      throw errorWithCode("ENOENT: no such file or directory", "ENOENT");
+    }
+    const absFrom = await this.vfs.resolveEntry(from);
+    const absTo = await this.vfs.resolveEntry(to);
+    if (from === to) {
+      throw errorWithCode("Source and destination are identical", "EINVAL");
+    }
+    if (isFolder && to.startsWith(`${from}/`)) {
+      throw errorWithCode("A folder cannot move into itself", "EINVAL");
+    }
+    if (this.files.has(to) || this.folders.has(to)) {
+      throw errorWithCode("Destination already exists", "EEXIST");
+    }
+    const parent = parentOf(to);
+    if (parent !== "" && !this.folders.has(parent)) {
+      throw errorWithCode("Destination parent folder does not exist", "ENOENT");
+    }
+
+    const before = [...this.files.keys()];
+    const moves = new Map<string, string>();
+    for (const p of before) {
+      if (p === from) moves.set(p, to);
+      else if (p.startsWith(`${from}/`))
+        moves.set(p, to + p.slice(from.length));
+    }
+    const linkers = new Set<string>();
+    for (const p of moves.keys()) if (p.endsWith(".md")) linkers.add(p);
+    for (const [note, targets] of Object.entries(this.metadata.resolvedLinks)) {
+      if (Object.keys(targets).some((t) => moves.has(t))) linkers.add(note);
+    }
+
+    // The signatures from before the move go with the files: the move
+    // changes none of their bytes, and a change made outside since the index
+    // last looked then shows as a mismatch at the next reconcile instead of
+    // being paired with metadata that does not describe it.
+    const signatures = new Map<string, string | undefined>();
+    for (const old of moves.keys())
+      signatures.set(old, this.signatures.get(old));
+
+    const { leftover } = await moveNoReplace(
+      absFrom,
+      absTo,
+      isFolder,
+      this.options.moveOps ?? nodeMoveOps,
+    );
+
+    // A file that becomes a note, or stops being one, has no metadata to
+    // carry over: a note's is parsed from the disk, as the scan would.
+    const isNote = (p: string) => p.endsWith(".md");
+    const fresh = new Map<string, { signature: string; content: string }>();
+    for (const [old, next] of moves) {
+      if (isNote(old) || !isNote(next)) continue;
+      const abs = path.join(this.vfs.root, ...next.split("/"));
+      const st = await fs.lstat(abs).catch(() => null);
+      if (!st?.isFile()) continue;
+      const content = await fs.readFile(abs, "utf8").catch(() => null);
+      if (content !== null)
+        fresh.set(next, { signature: signature(st), content });
+    }
+    await this.batch(async () => {
+      const renamed: Array<[TAbstractFile, string]> = [];
+      this.detach(entry);
+      if (isFolder) {
+        const old = [...this.folders.keys()]
+          .filter((p) => p === from || p.startsWith(`${from}/`))
+          .sort((a, b) => a.length - b.length);
+        const folders = old.map((p) => this.folders.get(p) as TFolder);
+        for (const p of old) this.folders.delete(p);
+        folders.forEach((folder, i) => {
+          folder.path = to + old[i].slice(from.length);
+          folder.syncName();
+          this.folders.set(folder.path, folder);
+          renamed.push([folder, old[i]]);
+        });
+      }
+      for (const [old, next] of moves) {
+        const file = this.files.get(old) as TFile;
+        const becomesNote = !isNote(old) && isNote(next);
+        const stopsBeingNote = isNote(old) && !isNote(next);
+        if (stopsBeingNote) this.metadata.removeFile(file);
+        this.files.delete(old);
+        file.path = next;
+        file.syncName();
+        this.files.set(next, file);
+        this.signatures.delete(old);
+        const kept = fresh.get(next);
+        const sig = becomesNote ? kept?.signature : signatures.get(old);
+        if (sig !== undefined) this.signatures.set(next, sig);
+        if (becomesNote) {
+          if (kept) this.metadata.setContent(file, kept.content, false);
+        } else if (!stopsBeingNote) {
+          this.metadata.moveFile(file, old);
+        }
+        renamed.push([file, old]);
+      }
+      const home = this.ensureFolder(parentOf(to));
+      entry.parent = home;
+      home.children.push(entry);
+      this.metadata.fileSetChanged();
+      for (const [moved, old] of renamed) this.emit("rename", moved, old);
+    });
+    return {
+      moves,
+      before,
+      linkers: [...linkers].sort(),
+      ...(leftover === undefined ? {} : { leftover: this.relative(leftover) }),
+    };
+  }
+
+  /** The vault-relative path of an absolute path inside the vault. */
+  private relative(abs: string): string {
+    return path.relative(this.vfs.root, abs).split(path.sep).join("/");
   }
 
   /* ---------------------------------------------------------------- */
@@ -295,13 +505,13 @@ export class HeadlessVault extends HeadlessEvents {
     if (this.batchDepth === 0) {
       const events = this.deferred;
       this.deferred = [];
-      for (const [name, entry] of events) this.trigger(name, entry);
+      for (const [name, ...args] of events) this.trigger(name, ...args);
     }
   }
 
-  private emit(name: string, entry: TAbstractFile): void {
-    if (this.batchDepth > 0) this.deferred.push([name, entry]);
-    else this.trigger(name, entry);
+  private emit(name: string, entry: TAbstractFile, ...rest: unknown[]): void {
+    if (this.batchDepth > 0) this.deferred.push([name, entry, ...rest]);
+    else this.trigger(name, entry, ...rest);
   }
 
   /**
@@ -390,11 +600,22 @@ export class HeadlessVault extends HeadlessEvents {
 
   private async reconcileNow(rel: string): Promise<void> {
     const abs = await this.vfs.tryResolve(rel);
-    const stats = abs === null ? null : await fs.lstat(abs).catch(() => null);
+    const lstat = this.options.lstat ?? ((p: string) => fs.lstat(p));
+    const stats = abs === null ? null : await lstat(abs).catch(() => null);
     if (stats === null || !(stats.isFile() || stats.isDirectory())) {
       if (this.files.has(rel) || this.folders.has(rel)) {
         await this.batch(async () => this.removeEntry(rel));
       }
+      return;
+    }
+    // On a case-insensitive filesystem a stat for the old spelling of a path
+    // that was renamed in case still succeeds: only the name the parent
+    // folder lists is real.
+    if (
+      !this.files.has(rel) &&
+      !this.folders.has(rel) &&
+      !(await this.isListed(abs as string))
+    ) {
       return;
     }
     if (stats.isDirectory()) {
@@ -422,6 +643,13 @@ export class HeadlessVault extends HeadlessEvents {
     if (stats.isFile()) {
       await this.batch(() => this.indexFromDisk(rel, stats));
     }
+  }
+
+  /** True when the folder that holds `abs` lists its exact name. */
+  private async isListed(abs: string): Promise<boolean> {
+    const name = path.basename(abs).normalize("NFC");
+    const names = await fs.readdir(path.dirname(abs)).catch(() => null);
+    return names?.some((n) => n.normalize("NFC") === name) ?? false;
   }
 
   private async walk(
@@ -558,18 +786,21 @@ export class HeadlessVault extends HeadlessEvents {
     } catch (err) {
       return Promise.reject(err);
     }
-    return this.enqueue(normalized, async () => {
-      if (this.files.has(normalized) || this.folders.has(normalized)) {
-        throw new Error("File already exists.");
-      }
-      const abs = await this.vfs.resolveEntry(normalized);
-      await this.writeAtomic(abs, data, true);
-      await this.reconcile(normalized);
-      const file = this.files.get(normalized);
-      if (!file)
-        throw errorWithCode("ENOENT: no such file or directory", "ENOENT");
-      return file;
-    });
+    return this.enqueue(
+      () => normalized,
+      async () => {
+        if (this.files.has(normalized) || this.folders.has(normalized)) {
+          throw new Error("File already exists.");
+        }
+        const abs = await this.vfs.resolveEntry(normalized);
+        await this.writeAtomic(abs, data, true);
+        await this.reconcile(normalized);
+        const file = this.files.get(normalized);
+        if (!file)
+          throw errorWithCode("ENOENT: no such file or directory", "ENOENT");
+        return file;
+      },
+    );
   }
 
   private async writeExisting(
@@ -629,29 +860,70 @@ export class HeadlessVault extends HeadlessEvents {
     });
   }
 
-  private enqueue<T>(rel: string, fn: () => Promise<T>): Promise<T> {
-    const previous = this.queues.get(rel) ?? Promise.resolve();
-    const next = previous.catch(() => {}).then(fn);
-    this.queues.set(rel, next);
-    void next
-      .finally(() => {
-        if (this.queues.get(rel) === next) this.queues.delete(rel);
-      })
-      .catch(() => {});
-    return next;
+  /**
+   * Run `fn` as a write to the path `key()` names, after the writes queued
+   * before it on that path. It shares the vault with other writes and not
+   * with a rename: it waits for one in progress or pending, and a rename
+   * waits for it. The key is read once the rename is over, so a path that
+   * moved meanwhile is queued under its new name.
+   */
+  private async enqueue<T>(
+    key: () => string,
+    fn: () => Promise<T>,
+  ): Promise<T> {
+    while (this.renaming !== null) await this.renaming;
+    this.writers += 1;
+    try {
+      const rel = key();
+      const previous = this.queues.get(rel) ?? Promise.resolve();
+      const next = previous.catch(() => {}).then(fn);
+      this.queues.set(rel, next);
+      void next
+        .finally(() => {
+          if (this.queues.get(rel) === next) this.queues.delete(rel);
+        })
+        .catch(() => {});
+      return await next;
+    } finally {
+      this.writers -= 1;
+      if (this.writers === 0) {
+        const waiters = this.drainWaiters;
+        this.drainWaiters = [];
+        for (const wake of waiters) wake();
+      }
+    }
+  }
+
+  /**
+   * Run `fn` with no write in flight and none starting. Renames run one at
+   * a time. Writers never wait on a rename from inside a write, so this
+   * cannot deadlock.
+   */
+  private async exclusive<T>(fn: () => Promise<T>): Promise<T> {
+    while (this.renaming !== null) await this.renaming;
+    let release!: () => void;
+    this.renaming = new Promise<void>((resolve) => (release = resolve));
+    try {
+      while (this.writers > 0) {
+        await new Promise<void>((resolve) => this.drainWaiters.push(resolve));
+      }
+      return await fn();
+    } finally {
+      this.renaming = null;
+      release();
+    }
   }
 
   /**
    * Move `abs` into `dir` as `name`, or `name <time>`, `name <time> 1` and
-   * so on when taken. The name is claimed with an exclusive create before
-   * the move, so the move replaces only that placeholder and never a file
+   * so on when taken. The move never replaces an entry, so it keeps a file
    * trashed earlier, even within the same clock tick.
    */
   private async moveToFreeName(
     abs: string,
     dir: string,
     name: string,
-  ): Promise<void> {
+  ): Promise<MoveResult> {
     const isFolder = (await fs.stat(abs)).isDirectory();
     const dot = name.lastIndexOf(".");
     const stem = dot > 0 ? name.slice(0, dot) : name;
@@ -663,21 +935,18 @@ export class HeadlessVault extends HeadlessEvents {
         n === 0 ? name : `${stem} ${time}${n > 1 ? ` ${n - 1}` : ""}${ext}`,
       );
       try {
-        if (isFolder) await fs.mkdir(candidate);
-        else await fs.writeFile(candidate, "", { flag: "wx" });
+        return await moveNoReplace(
+          abs,
+          candidate,
+          isFolder,
+          this.options.moveOps ?? nodeMoveOps,
+        );
       } catch (err) {
+        // A file stranded at its temporary name also carries EEXIST in its
+        // message, but its code is ESTRANDED: it is never a taken name.
         if ((err as NodeJS.ErrnoException).code === "EEXIST") continue;
         throw err;
       }
-      try {
-        await fs.rename(abs, candidate);
-      } catch (err) {
-        await (isFolder ? fs.rmdir(candidate) : fs.unlink(candidate)).catch(
-          () => {},
-        );
-        throw err;
-      }
-      return;
     }
   }
 

@@ -588,19 +588,21 @@ Without `PATH`, give the absolute path of the file instead: `node /absolute/path
 
 ### What works
 
-These tools are served, 45 in all with the three adaptive-loading meta-tools:
+These tools are served, 47 in all with the three adaptive-loading meta-tools:
 
-- Files: `list_vault_files`, `get_vault_file`, `get_vault_files`, `get_vault_file_partial`, `create_vault_file`, `create_vault_binary_file`, `append_to_vault_file`, `patch_vault_file`, `delete_vault_file`, `create_vault_directory`, `delete_vault_directory`, `search_and_replace`, `get_file_info`, `list_attachments`, `get_recent_files`, `get_vault_overview`
-- Search: `search_vault_simple`, and `search_vault` with JsonLogic queries (a Dataview query returns `dataview_not_installed`)
+- Files: `list_vault_files`, `get_vault_file`, `get_vault_files`, `get_vault_file_partial`, `create_vault_file`, `create_vault_binary_file`, `append_to_vault_file`, `patch_vault_file`, `delete_vault_file`, `rename_vault_file`, `create_vault_directory`, `delete_vault_directory`, `search_and_replace`, `get_file_info`, `list_attachments`, `get_recent_files`, `get_vault_overview`
+- Search: `search_files_by_name`, `search_vault_simple`, and `search_vault` with JsonLogic queries (a Dataview query returns `dataview_not_installed`)
 - Properties and tags: `get_note_property`, `get_note_properties`, `set_note_property`, `delete_note_property`, `update_note_properties`, `list_property_values`, `list_tags`, `get_files_by_tag`, `rename_tag`
 - Structure and tasks: `get_note_outline`, `rename_heading`, `ensure_block_id`, `list_tasks`, `set_task_status`
 - Links: `get_outgoing_links`, `find_broken_links`, `get_backlinks`, `find_orphaned_notes`
 - Canvas: `get_canvas`, `add_canvas_node`, `connect_canvas_nodes`, `update_canvas_node`, `delete_canvas_node`
 - Server and loading: `get_server_info`, `tool_catalog`, `activate_tool`, `activate_tools`
 
-Not served, because they need the desktop app or a plugin: `rename_vault_file`, `search_files_by_name`, `fetch`, the daily and periodic note tools, every workspace, active-file, command, Dataview, Templater and bookmark tool, and `search_vault_smart`. Semantic search in headless mode is planned.
+Not served, because they need the desktop app or a plugin: `fetch`, the daily and periodic note tools, every workspace, active-file, command, Dataview, Templater and bookmark tool, and `search_vault_smart`. Semantic search in headless mode is planned.
 
 The server reads tags, links, headings, blocks and tasks with its own parser, which follows Obsidian's rules closely but is not Obsidian's. Edits made outside the server (an editor, a sync client, `git pull`) are picked up by a file watcher within a fraction of a second. Folders whose name starts with a dot, such as `.obsidian` and `.git`, are neither read nor written, and a path that leads outside the vault folder is refused. Symlinks inside the vault are ignored. A tool that trashes a file or folder moves it to `.trash/` in the vault. Obsidian's "Excluded files" setting does not apply.
+
+`search_files_by_name` ranks with its own fuzzy scorer, which follows Obsidian's quick switcher in spirit (in-order characters, contiguous runs and word starts rank higher) but gives different scores. `rename_vault_file` moves a file or folder and rewrites the links to it in every other note: wikilinks, embeds, markdown links (URL-encoded and `<angle bracket>` paths too) and frontmatter links, each keeping its own style, with subpaths and aliases intact. Relative links inside a moved note are recomputed so they still reach the same files. If the move succeeds but a note cannot be rewritten, the error names that note. Links inside canvases and `.base` files are not rewritten, and the link style is taken from each link, not from Obsidian's Files & Links settings.
 
 ### HTTP service mode
 

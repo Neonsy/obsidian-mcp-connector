@@ -81,6 +81,14 @@ import {
   deleteVaultDirectoryHandler,
   deleteVaultDirectorySchema,
 } from "./tools/deleteVaultDirectory";
+import {
+  renameVaultFileHandler,
+  renameVaultFileSchema,
+} from "./tools/renameVaultFile";
+import {
+  searchFilesByNameHandler,
+  searchFilesByNameSchema,
+} from "./tools/searchFilesByName";
 import { searchVaultHandler, searchVaultSchema } from "./tools/searchVault";
 import {
   searchVaultSimpleHandler,
@@ -257,6 +265,9 @@ export async function registerVaultTools(
   registry.register(deleteVaultDirectorySchema, async ({ arguments: args }) =>
     deleteVaultDirectoryHandler({ arguments: args, app: ctx.app }),
   );
+  registry.register(renameVaultFileSchema, async ({ arguments: args }) =>
+    renameVaultFileHandler({ arguments: args, app: ctx.app }),
+  );
   // Metadata
   registry.register(listTagsSchema, async ({ arguments: args }) =>
     listTagsHandler({ arguments: args, app: ctx.app }),
@@ -322,6 +333,9 @@ export async function registerVaultTools(
     deleteCanvasNodeHandler({ arguments: args, app: ctx.app }),
   );
   // Search
+  registry.register(searchFilesByNameSchema, async ({ arguments: args }) =>
+    searchFilesByNameHandler({ arguments: args, app: ctx.app }),
+  );
   registry.register(searchVaultSchema, async ({ arguments: args }) =>
     searchVaultHandler({
       arguments: args,

@@ -34,14 +34,6 @@ import {
   getWorkspaceStateSchema,
 } from "./tools/getWorkspaceState";
 import {
-  searchFilesByNameHandler,
-  searchFilesByNameSchema,
-} from "./tools/searchFilesByName";
-import {
-  renameVaultFileHandler,
-  renameVaultFileSchema,
-} from "./tools/renameVaultFile";
-import {
   searchVaultSmartHandler,
   searchVaultSmartSchema,
   type SearchVaultSmartContext,
@@ -142,12 +134,6 @@ export async function registerTools(
   );
   registry.register(getWorkspaceStateSchema, async ({ arguments: args }) =>
     getWorkspaceStateHandler({ arguments: args, app: ctx.app }),
-  );
-  registry.register(searchFilesByNameSchema, async ({ arguments: args }) =>
-    searchFilesByNameHandler({ arguments: args, app: ctx.app }),
-  );
-  registry.register(renameVaultFileSchema, async ({ arguments: args }) =>
-    renameVaultFileHandler({ arguments: args, app: ctx.app }),
   );
   registry.register(listBookmarksSchema, async ({ arguments: args }) =>
     listBookmarksHandler({ arguments: args, app: ctx.app }),
