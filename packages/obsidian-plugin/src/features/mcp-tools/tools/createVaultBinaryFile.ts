@@ -5,7 +5,7 @@ import { ensureParentFolderExists } from "$/features/mcp-tools/services/ensureFo
 import { withVaultWriteLock } from "$/features/mcp-tools/services/vaultWriteLock";
 import { checkCreateBinaryPrecondition } from "$/features/mcp-tools/services/createPrecondition";
 import { resolveRequireWritePreconditions } from "$/features/mcp-tools/services/writePreconditionSetting";
-import type McpToolsPlugin from "$/main";
+import type { PluginDataLike } from "$/shared/types";
 
 export const createVaultBinaryFileSchema = type({
   name: '"create_vault_binary_file"',
@@ -32,7 +32,7 @@ export type CreateVaultBinaryFileContext = {
    * Without it the write-precondition setting resolves to its default (off),
    * which is the behaviour every existing client already relies on.
    */
-  plugin?: McpToolsPlugin;
+  plugin?: PluginDataLike;
 };
 
 /**

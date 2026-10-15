@@ -23,6 +23,7 @@ import {
   TOOL_CALL_EVENT,
   VERSION_REJECTED_EVENT,
 } from "./requestLog";
+import { registerTools } from "$/features/mcp-tools";
 
 beforeEach(() => resetMockVault());
 
@@ -68,6 +69,7 @@ function makeAllProfilePlugin() {
 describe("createMcpService", () => {
   test("exposes a request handler compatible with StreamableHTTPServerTransport", async () => {
     const svc = await createMcpService({
+      registerTools,
       app: mockApp(),
       plugin: mockPlugin(),
       pluginVersion: "0.4.0-alpha.1",
@@ -82,6 +84,7 @@ describe("end-to-end: HTTP → McpServer", () => {
   test("tools/list responds with get_server_info registered", async () => {
     const { startHttpServer } = await import("./httpServer");
     const svc = await createMcpService({
+      registerTools,
       app: mockApp(),
       plugin: mockPlugin(),
       pluginVersion: "0.4.0-alpha.1",
@@ -123,6 +126,7 @@ describe("end-to-end: HTTP → McpServer", () => {
     const { startHttpServer } = await import("./httpServer");
     const { request } = await import("node:http");
     const svc = await createMcpService({
+      registerTools,
       app: mockApp(),
       plugin: mockPlugin(),
       pluginVersion: "0.4.0-alpha.1",
@@ -190,6 +194,7 @@ describe("end-to-end: HTTP → McpServer", () => {
     // the core subset, and the assertion would be measuring policy instead.
     const { startHttpServer } = await import("./httpServer");
     const svc = await createMcpService({
+      registerTools,
       app: mockApp(),
       plugin: makeAllProfilePlugin(),
       pluginVersion: "0.4.0-alpha.1",
@@ -396,6 +401,7 @@ describe("end-to-end: HTTP → McpServer", () => {
   test("tools/call get_server_info returns health payload", async () => {
     const { startHttpServer } = await import("./httpServer");
     const svc = await createMcpService({
+      registerTools,
       app: mockApp(),
       plugin: mockPlugin(),
       pluginVersion: "0.4.0-alpha.1",
@@ -441,6 +447,7 @@ describe("end-to-end: HTTP → McpServer", () => {
   test("tools/call result carries structuredContent in the wire response", async () => {
     const { startHttpServer } = await import("./httpServer");
     const svc = await createMcpService({
+      registerTools,
       app: mockApp(),
       plugin: mockPlugin(),
       pluginVersion: "0.4.0-alpha.1",
@@ -492,6 +499,7 @@ describe("end-to-end: HTTP → McpServer", () => {
   test("initialize reports the configured serverInfo.name", async () => {
     const { startHttpServer } = await import("./httpServer");
     const svc = await createMcpService({
+      registerTools,
       app: mockApp(),
       plugin: mockPlugin(),
       pluginVersion: "0.4.0-alpha.1",
@@ -534,6 +542,7 @@ describe("end-to-end: HTTP → McpServer", () => {
   test("initialize reports a custom serverInfo.name override", async () => {
     const { startHttpServer } = await import("./httpServer");
     const svc = await createMcpService({
+      registerTools,
       app: mockApp(),
       plugin: mockPlugin(),
       pluginVersion: "0.4.0-alpha.1",
@@ -591,6 +600,7 @@ describe("recordCall gating — self-healing inactive tool error (issue #354)", 
     const { startHttpServer } = await import("./httpServer");
     const plugin = makeCountingPlugin();
     const svc = await createMcpService({
+      registerTools,
       app: mockApp(),
       plugin,
       pluginVersion: "0.4.0-alpha.1",
@@ -636,6 +646,7 @@ describe("recordCall gating — self-healing inactive tool error (issue #354)", 
     const { startHttpServer } = await import("./httpServer");
     const plugin = makeCountingPlugin();
     const svc = await createMcpService({
+      registerTools,
       app: mockApp(),
       plugin,
       pluginVersion: "0.4.0-alpha.1",
@@ -677,6 +688,7 @@ describe("recordCall gating — self-healing inactive tool error (issue #354)", 
     const { startHttpServer } = await import("./httpServer");
     const plugin = makeCountingPlugin();
     const svc = await createMcpService({
+      registerTools,
       app: mockApp(),
       plugin,
       pluginVersion: "0.4.0-alpha.1",
@@ -719,6 +731,7 @@ describe("createMcpService — multi-token resolveTokens call-sites (issue #348,
   test("two tokens on one server route to different handler invocations with different tokenId", async () => {
     const { startHttpServer } = await import("./httpServer");
     const svc = await createMcpService({
+      registerTools,
       app: mockApp(),
       plugin: mockPlugin(),
       pluginVersion: "0.4.0-alpha.1",
@@ -779,6 +792,7 @@ describe("createMcpService — multi-token resolveTokens call-sites (issue #348,
   test("a failing resolveTokens 401s the request rather than authenticating anyone", async () => {
     const { startHttpServer } = await import("./httpServer");
     const svc = await createMcpService({
+      registerTools,
       app: mockApp(),
       plugin: mockPlugin(),
       pluginVersion: "0.4.0-alpha.1",
@@ -858,6 +872,7 @@ describe("Task 5 — per-token scope threading (ADR-0014 §3)", () => {
     const { startHttpServer } = await import("./httpServer");
     const plugin = makeScopedPlugin();
     const svc = await createMcpService({
+      registerTools,
       app: mockApp(),
       plugin,
       pluginVersion: "0.4.0-alpha.1",
@@ -917,6 +932,7 @@ describe("Task 5 — per-token scope threading (ADR-0014 §3)", () => {
     const { startHttpServer } = await import("./httpServer");
     const plugin = makeScopedPlugin();
     const svc = await createMcpService({
+      registerTools,
       app: mockApp(),
       plugin,
       pluginVersion: "0.4.0-alpha.1",
@@ -1050,6 +1066,7 @@ describe("OMC-008 Task 3 — buildMcpServer is the single per-request factory, c
   test("buildMcpServer(tokenA) and buildMcpServer(tokenB) produce tools/list sets matching each token's own policy", async () => {
     const plugin = makeTwoTokenPlugin();
     const svc = await createMcpService({
+      registerTools,
       app: mockApp(),
       plugin,
       pluginVersion: "0.4.0-alpha.1",
@@ -1123,6 +1140,7 @@ describe("diagnostic log — transport events", () => {
   async function boot(plugin = makeAllProfilePlugin()) {
     const { startHttpServer } = await import("./httpServer");
     const svc = await createMcpService({
+      registerTools,
       app: mockApp(),
       plugin,
       pluginVersion: "0.4.0-alpha.1",

@@ -4,7 +4,7 @@ import { errorJson, successText } from "../services/responseBuilders";
 import { withVaultWriteLock } from "$/features/mcp-tools/services/vaultWriteLock";
 import { checkWholeFilePrecondition } from "$/features/mcp-tools/services/wholeFilePrecondition";
 import { resolveRequireWritePreconditions } from "$/features/mcp-tools/services/writePreconditionSetting";
-import type McpToolsPlugin from "$/main";
+import type { PluginDataLike } from "$/shared/types";
 
 export const deleteVaultFileSchema = type({
   name: '"delete_vault_file"',
@@ -24,7 +24,7 @@ export type DeleteVaultFileContext = {
   arguments: { path: string; expectedContent?: string };
   app: App;
   /** Absent in partial test fixtures; the precondition setting then resolves to its default (off). */
-  plugin?: McpToolsPlugin;
+  plugin?: PluginDataLike;
 };
 
 export async function deleteVaultFileHandler(

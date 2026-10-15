@@ -47,6 +47,7 @@ const TOKEN = "c".repeat(32);
 
 const { createMcpService } =
   await import("../../src/features/mcp-transport/services/mcpServer");
+const { registerTools } = await import("../../src/features/mcp-tools");
 const { startHttpServer } =
   await import("../../src/features/mcp-transport/services/httpServer");
 const { staticTokenProvider } =
@@ -56,6 +57,7 @@ const service = await createMcpService({
   app: mockApp(),
   plugin: mockPlugin(),
   pluginVersion: "1.0.1",
+  registerTools,
   serverName: "mcp-connector",
 });
 

@@ -8,6 +8,7 @@ import {
   EMPTY_POLICY,
   compilePolicy,
 } from "$/shared/pathPolicy";
+import { registerTools } from "$/features/mcp-tools";
 
 /**
  * Proves the enforcement seam is actually IN the path, not merely
@@ -38,6 +39,7 @@ async function buildRegistry(folders?: string[]) {
 
 async function compose(folders?: string[]) {
   return composeToolRegistry({
+    registerTools,
     app: mockApp(),
     plugin: pluginWithFolders(folders),
     pluginVersion: "0.0.0-test",

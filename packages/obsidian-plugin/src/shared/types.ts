@@ -5,6 +5,8 @@
  * the `$/shared` barrel (which pulls in `src/main` and risks a cycle).
  */
 
+import type { App } from "obsidian";
+
 /** Read-only view of the Obsidian plugin's `data.json` persistence. */
 export interface PluginReadLike {
   loadData: () => Promise<unknown>;
@@ -13,6 +15,16 @@ export interface PluginReadLike {
 /** Read-write view of the plugin's `data.json` persistence. */
 export interface PluginDataLike extends PluginReadLike {
   saveData: (data: unknown) => Promise<void>;
+}
+
+/**
+ * What the MCP transport needs from whatever hosts it: the Obsidian
+ * plugin on the desktop, a vault-directory shim in the headless server.
+ * Structural, so neither side imports the other.
+ */
+export interface McpHost extends PluginDataLike {
+  app: App;
+  manifest: { id?: string; version: string };
 }
 
 /**

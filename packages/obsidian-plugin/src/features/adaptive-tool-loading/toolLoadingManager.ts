@@ -116,7 +116,7 @@ type PendingState = {
    * signal, and is left untouched by a reset (ADR-0025 D7).
    */
   everCalled: Map<string, Set<string>>;
-  timer: number | null;
+  timer: ReturnType<typeof globalThis.setTimeout> | null;
 };
 const pendingByPlugin = new WeakMap<PluginDataLike, PendingState>();
 
@@ -215,10 +215,9 @@ export class ToolLoadingManager {
       return;
     }
     if (pending.timer === null) {
-      // window.setTimeout (not the bare global): Obsidian popout-window
-      // compatibility, and the plugin runs in the renderer where window
-      // is always present.
-      pending.timer = window.setTimeout(() => {
+      // globalThis.setTimeout rather than window.setTimeout: the headless
+      // build runs under Node, where there is no window.
+      pending.timer = globalThis.setTimeout(() => {
         pending.timer = null;
         // Fire-and-forget: a failed flush restores the batch in memory
         // (see flushPendingCalls) and the next call retries. Logged so a
@@ -240,7 +239,7 @@ export class ToolLoadingManager {
   async flushPendingCalls(plugin: PluginDataLike): Promise<void> {
     const pending = pendingFor(plugin);
     if (pending.timer !== null) {
-      window.clearTimeout(pending.timer);
+      globalThis.clearTimeout(pending.timer);
       pending.timer = null;
     }
     // Both maps gate the early return (ADR-0025 D2): a flush with only
@@ -441,7 +440,7 @@ export class ToolLoadingManager {
     // discards it (ADR-0025 D7); a later flush persists it normally.
     const pending = pendingFor(plugin);
     if (pending.timer !== null) {
-      window.clearTimeout(pending.timer);
+      globalThis.clearTimeout(pending.timer);
       pending.timer = null;
     }
     pending.counts.clear();

@@ -12,7 +12,7 @@
  * stay synchronous.
  */
 import { SettingsStore } from "$/shared/settingsStore";
-import type McpToolsPlugin from "$/main";
+import type { PluginDataLike } from "$/shared/types";
 import { DEFAULT_REQUIRE_WRITE_PRECONDITIONS } from "../types";
 
 /**
@@ -23,7 +23,7 @@ import { DEFAULT_REQUIRE_WRITE_PRECONDITIONS } from "../types";
  * does, and off is the behaviour every existing client already relies on.
  */
 export async function resolveRequireWritePreconditions(
-  plugin?: McpToolsPlugin,
+  plugin?: PluginDataLike,
 ): Promise<boolean> {
   if (!plugin) return DEFAULT_REQUIRE_WRITE_PRECONDITIONS;
   const slice = (await new SettingsStore(plugin).readSlice("mcpTools")) as

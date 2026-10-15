@@ -15,6 +15,7 @@ import {
   TOOL_CALL_EVENT,
   VERSION_REJECTED_EVENT,
 } from "./requestLog";
+import { registerTools } from "$/features/mcp-tools";
 
 /**
  * TDD RED phase for OMC-008 Task 4 (`docs/architecture/ADR-0016-...md`,
@@ -166,6 +167,7 @@ function makeAllProfilePlugin(overrides: Record<string, unknown> = {}) {
 async function startService(): Promise<RunningServer> {
   const { startHttpServer } = await import("./httpServer");
   const svc = await createMcpService({
+    registerTools,
     app: mockApp(),
     plugin: makeAllProfilePlugin(),
     pluginVersion: "0.4.0-alpha.1",
@@ -583,6 +585,7 @@ describe("modern path — per-token tool surfaces match the legacy path (R-09)",
     const { startHttpServer } = await import("./httpServer");
     const plugin = makeScopedPlugin();
     const svc = await createMcpService({
+      registerTools,
       app: mockApp(),
       plugin,
       pluginVersion: "0.4.0-alpha.1",
@@ -697,6 +700,7 @@ describe("activate_tool's notifications/tools/list_changed rides the calling req
     const { startHttpServer } = await import("./httpServer");
     const plugin = makeCoreScopedPlugin();
     const svc = await createMcpService({
+      registerTools,
       app: mockApp(),
       plugin,
       pluginVersion: "0.4.0-alpha.1",
@@ -816,6 +820,7 @@ describe("search_vault_smart's notifications/progress rides the modern path's ow
     const { startHttpServer } = await import("./httpServer");
     const plugin = buildingSemanticPlugin();
     const svc = await createMcpService({
+      registerTools,
       app: mockApp(),
       plugin,
       pluginVersion: "0.4.0-alpha.1",
@@ -979,6 +984,7 @@ describe("modern path — tools/list_changed fans out to an open subscriptions/l
       },
     });
     const svc = await createMcpService({
+      registerTools,
       app: mockApp(),
       plugin,
       pluginVersion: "0.4.0-alpha.1",
@@ -1058,6 +1064,7 @@ describe("modern path — tools/list_changed fans out to an open subscriptions/l
 
   test("notifyToolsChanged is a no-op when no subscribers are open (R-07)", async () => {
     const svc = await createMcpService({
+      registerTools,
       app: mockApp(),
       plugin: makeAllProfilePlugin(),
       pluginVersion: "0.4.0-alpha.1",

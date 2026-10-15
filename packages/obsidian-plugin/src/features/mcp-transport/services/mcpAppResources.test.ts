@@ -7,6 +7,7 @@ import {
 } from "./mcpServer";
 import { staticTokenProvider } from "./tokenStore";
 import type { RunningServer } from "./httpServer";
+import { registerTools } from "$/features/mcp-tools";
 
 /**
  * ADR-0018 (OMC-016), Task 1. `resourceRegistry.test.ts` covers the
@@ -91,6 +92,7 @@ function makeAllProfilePlugin() {
 async function startService(): Promise<RunningServer> {
   const { startHttpServer } = await import("./httpServer");
   const svc = await createMcpService({
+    registerTools,
     app: mockApp(),
     plugin: makeAllProfilePlugin(),
     pluginVersion: "0.4.0-alpha.1",
@@ -330,6 +332,7 @@ describe("composed — the MCP Apps off switch (#543)", () => {
   }): Promise<RunningServer> {
     const { startHttpServer } = await import("./httpServer");
     const svc = await createMcpService({
+      registerTools,
       app: mockApp(),
       plugin: makePlugin(opts),
       pluginVersion: "0.4.0-alpha.1",

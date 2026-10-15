@@ -50,7 +50,7 @@ const FLUSH_DELAY_MS = 2_000;
  */
 let pending: EraCounters = { legacy: 0, modern: 0 };
 let pendingByToken = new Map<string, EraCounters>();
-let timer: number | null = null;
+let timer: ReturnType<typeof globalThis.setTimeout> | null = null;
 
 /** Normalize a stored `eraCounters` value; anything absent or malformed reads as zero. */
 export function readEraCounters(value: unknown): EraCounters {
@@ -103,10 +103,9 @@ export function scheduleFlush(
   delayMs: number = FLUSH_DELAY_MS,
 ): void {
   if (timer !== null) return;
-  // window.setTimeout (not the bare global): Obsidian popout-window
-  // compatibility, and the plugin runs in the renderer where window is
-  // always present.
-  timer = window.setTimeout(() => {
+  // globalThis.setTimeout rather than window.setTimeout: the headless
+  // build runs under Node, where there is no window.
+  timer = globalThis.setTimeout(() => {
     timer = null;
     // Fire-and-forget: a failed flush puts the batch back (see below) and
     // the next request re-arms the timer.
@@ -127,7 +126,7 @@ export function scheduleFlush(
  */
 export async function flush(plugin: PluginDataLike): Promise<void> {
   if (timer !== null) {
-    window.clearTimeout(timer);
+    globalThis.clearTimeout(timer);
     timer = null;
   }
   if (pending.legacy === 0 && pending.modern === 0) return;

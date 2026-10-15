@@ -1,6 +1,6 @@
 import { type } from "arktype";
 import { type App, type TFile } from "obsidian";
-import type McpToolsPlugin from "$/main";
+import type { PluginDataLike } from "$/shared/types";
 import { SettingsStore } from "$/shared/settingsStore";
 import { resolveTFile } from "../services/resolveTFile";
 import { resolveHeadingForUri } from "../services/anchorTargets";
@@ -97,7 +97,7 @@ export type GetVaultFileContext = {
   /** Optional — absent in partial test fixtures. Used to resolve the
    * `mcpTools.maxTextOutputKB` setting; falls back to the default cap
    * when omitted. */
-  plugin?: McpToolsPlugin;
+  plugin?: PluginDataLike;
 };
 
 /**
@@ -142,7 +142,7 @@ function truncateToByteLength(text: string, maxBytes: number): string {
  * test fixtures) or the setting is unset.
  */
 async function resolveMaxTextOutputBytes(
-  plugin?: McpToolsPlugin,
+  plugin?: PluginDataLike,
 ): Promise<number> {
   if (!plugin) return DEFAULT_MAX_TEXT_OUTPUT_KB * 1024;
   const slice = (await new SettingsStore(plugin).readSlice("mcpTools")) as

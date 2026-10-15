@@ -13,16 +13,13 @@ import {
 } from "@modelcontextprotocol/server";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { type App } from "obsidian";
-import type McpToolsPlugin from "$/main";
 import { logger } from "$/shared";
-import type { ToolScope } from "$/shared/types";
+import type { McpHost, ToolScope } from "$/shared/types";
 import type { ToolRegistry } from "./toolRegistry";
 import type { PromptRegistry } from "./promptRegistry";
 import type { ResourceRegistry } from "./resourceRegistry";
-import {
-  ToolLoadingManager,
-  META_TOOLS,
-} from "$/features/adaptive-tool-loading";
+import { ToolLoadingManager } from "$/features/adaptive-tool-loading/toolLoadingManager";
+import { META_TOOLS } from "$/features/adaptive-tool-loading/constants";
 import { readPolicy } from "$/features/adaptive-tool-loading/tokenPolicyStore";
 import { resolveToolScope } from "$/features/adaptive-tool-loading/resolveToolScope";
 import { SessionPromotions } from "$/features/adaptive-tool-loading/sessionPromotions";
@@ -30,7 +27,7 @@ import {
   resolveSearchResultsView,
   SEARCH_RESULTS_UI_META_KEYS,
 } from "$/features/mcp-apps/services/searchResultsViewSetting";
-import { composeToolRegistry } from "$/composeToolRegistry";
+import { composeToolRegistry, type ToolRegistrar } from "$/composeToolRegistry";
 import { pathPolicyFor } from "$/shared/policyProvider";
 import {
   ERROR_CODES,
@@ -161,10 +158,18 @@ export const SERVER_INSTRUCTIONS = [
   "  file_not_found).",
 ].join("\n");
 
-export type McpServiceConfig = {
+export type McpServiceConfig<H extends McpHost = McpHost> = {
   app: App;
-  plugin: McpToolsPlugin;
+  plugin: H;
   pluginVersion: string;
+  /** The host's tool set, see ToolRegistrar. */
+  registerTools: ToolRegistrar<H>;
+  /**
+   * The `instructions` text of the `initialize` and `server/discover`
+   * results. Defaults to SERVER_INSTRUCTIONS; a host that registers a
+   * smaller tool set passes text that does not advertise tools it lacks.
+   */
+  instructions?: string;
   /** Reported as `serverInfo.name` in the MCP `initialize` handshake (see issue #329). */
   serverName: string;
 };
@@ -255,8 +260,8 @@ export type McpService = {
  * but doing it per request would multiply the per-request cost
  * significantly with no benefit.
  */
-export async function createMcpService(
-  config: McpServiceConfig,
+export async function createMcpService<H extends McpHost>(
+  config: McpServiceConfig<H>,
 ): Promise<McpService> {
   // The fan-out for issue #419. Counters are vault-wide (ADR-0014), so a
   // promotion triggered by one client's traffic widens every adaptive token's
@@ -345,7 +350,7 @@ export async function createMcpService(
       {
         // Emitted by the SDK from `_oninitialize` only, so it is served to
         // the legacy era alone (ADR-0016) — see SERVER_INSTRUCTIONS.
-        instructions: SERVER_INSTRUCTIONS,
+        instructions: config.instructions ?? SERVER_INSTRUCTIONS,
         capabilities: {
           // Declare tools capability so the SDK allows tools/list and
           // tools/call request handler registration. Without this the

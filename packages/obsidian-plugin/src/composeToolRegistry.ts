@@ -9,7 +9,6 @@
  */
 
 import { Notice, type App } from "obsidian";
-import type McpToolsPlugin from "$/main";
 import {
   ToolRegistryClass,
   type ToolRegistry,
@@ -26,12 +25,12 @@ import { wireSearchResultsApp } from "$/features/mcp-apps";
 import { createGuardedApp, isGuardedApp } from "$/shared/guardedApp";
 import { pathPolicyFor } from "$/shared/policyProvider";
 import type { PathPolicy } from "$/shared/pathPolicy";
+import type { McpHost } from "$/shared/types";
 import {
   UNFILTERABLE_TOOL_REFUSALS,
   shouldDisableUnfilterableTools,
 } from "$/features/mcp-tools/types";
-import { registerTools } from "$/features/mcp-tools";
-import { applyDisabledToolsFilter } from "$/features/tool-toggle";
+import { applyDisabledToolsFilter } from "$/features/tool-toggle/services/applyFilter";
 import type { SessionPromotions } from "$/features/adaptive-tool-loading/sessionPromotions";
 import {
   toolCatalogSchema,
@@ -46,10 +45,22 @@ import {
   activateToolsHandler,
 } from "$/features/mcp-tools/tools/activateTools";
 
-export type ToolRegistryConfig = {
+/**
+ * Fills the registry with the host's tool set. The desktop plugin passes
+ * `registerTools`, the headless server `registerVaultTools`; the
+ * composition root takes no side so it stays free of desktop-only modules.
+ * Receives the guarded App, never the raw one.
+ */
+export type ToolRegistrar<H extends McpHost = McpHost> = (
+  registry: ToolRegistry,
+  ctx: { app: App; plugin: H; pluginVersion: string },
+) => Promise<void>;
+
+export type ToolRegistryConfig<H extends McpHost = McpHost> = {
   app: App;
-  plugin: McpToolsPlugin;
+  plugin: H;
   pluginVersion: string;
+  registerTools: ToolRegistrar<H>;
   /**
    * Where `activate_tool`'s in-session (persist: false) promotions go,
    * keyed by the calling token. Owned by the transport service so it
@@ -71,7 +82,9 @@ export type ToolRegistryConfig = {
  * registry's adaptive flags (ADR-0014 §3). The disable list still wins,
  * because the registry re-applies `userDisabled` under every scope.
  */
-export async function composeToolRegistry(config: ToolRegistryConfig): Promise<{
+export async function composeToolRegistry<H extends McpHost>(
+  config: ToolRegistryConfig<H>,
+): Promise<{
   toolRegistry: ToolRegistry;
   promptRegistry: PromptRegistry;
   resourceRegistry: ResourceRegistry;
@@ -111,7 +124,7 @@ export async function composeToolRegistry(config: ToolRegistryConfig): Promise<{
     );
   }
 
-  await registerTools(toolRegistry, {
+  await config.registerTools(toolRegistry, {
     app,
     plugin: config.plugin,
     pluginVersion: config.pluginVersion,

@@ -6,7 +6,7 @@ import {
   applyPatch,
   type PatchArgs,
 } from "$/features/mcp-tools/services/patchHelpers";
-import type McpToolsPlugin from "$/main";
+import type { PluginDataLike } from "$/shared/types";
 import { resolveRequireWritePreconditions } from "$/features/mcp-tools/services/writePreconditionSetting";
 
 export const patchVaultFileSchema = type({
@@ -56,7 +56,7 @@ export type PatchVaultFileContext = {
    * Without it the write-precondition setting resolves to its default (off),
    * which is the behaviour every existing client already relies on.
    */
-  plugin?: McpToolsPlugin;
+  plugin?: PluginDataLike;
 };
 
 export async function patchVaultFileHandler(

@@ -7,6 +7,7 @@ import {
 } from "./mcpServer";
 import { staticTokenProvider } from "./tokenStore";
 import * as parseRequestBody from "./parseRequestBody";
+import { registerTools } from "$/features/mcp-tools";
 
 /**
  * Era classification for OMC-008 (`docs/architecture/ADR-0016-...md`).
@@ -40,6 +41,7 @@ describe("eraRouter (Task 2) — the legacy path stays byte-identical (R-01)", (
   test("a claim-less initialize POST is answered with exactly today's bytes — full-body pin, must survive the classifier being wired in", async () => {
     const { startHttpServer } = await import("./httpServer");
     const svc = await createMcpService({
+      registerTools,
       app: mockApp(),
       plugin: mockPlugin(),
       pluginVersion: "0.4.0-alpha.1",
@@ -186,6 +188,7 @@ describe("eraRouter — a modern-envelope request is classified separately from 
     // to be well-formed at all.
     const { startHttpServer } = await import("./httpServer");
     const svc = await createMcpService({
+      registerTools,
       app: mockApp(),
       plugin: mockPlugin(),
       pluginVersion: "0.4.0-alpha.1",
@@ -262,6 +265,7 @@ describe("eraRouter — an unparseable body is classified legacy without constru
     // must keep producing.
     const { startHttpServer } = await import("./httpServer");
     const svc = await createMcpService({
+      registerTools,
       app: mockApp(),
       plugin: mockPlugin(),
       pluginVersion: "0.4.0-alpha.1",
@@ -304,6 +308,7 @@ describe("eraRouter — an unparseable body is classified legacy without constru
     const { startHttpServer } = await import("./httpServer");
     const { request } = await import("node:http");
     const svc = await createMcpService({
+      registerTools,
       app: mockApp(),
       plugin: mockPlugin(),
       pluginVersion: "0.4.0-alpha.1",
@@ -371,6 +376,7 @@ describe("eraRouter — the deferred version rung still fires on the legacy bran
     // and `data.mismatch` get their own assertions.
     const { startHttpServer } = await import("./httpServer");
     const svc = await createMcpService({
+      registerTools,
       app: mockApp(),
       plugin: mockPlugin(),
       pluginVersion: "0.4.0-alpha.1",
@@ -420,6 +426,7 @@ describe("eraRouter — the request body is read exactly once per request (R-08)
     const spy = spyOn(parseRequestBody, "readBodyWithCap");
     const { startHttpServer } = await import("./httpServer");
     const svc = await createMcpService({
+      registerTools,
       app: mockApp(),
       plugin: mockPlugin(),
       pluginVersion: "0.4.0-alpha.1",
@@ -489,6 +496,7 @@ describe("eraRouter — each era is attributed to the token that authenticated i
       },
     });
     const svc = await createMcpService({
+      registerTools,
       app: mockApp(),
       plugin,
       pluginVersion: "0.4.0-alpha.1",

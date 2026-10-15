@@ -14,6 +14,7 @@ import {
   setMockTags,
 } from "$/test-setup";
 import type McpToolsPlugin from "$/main";
+import { registerTools } from "$/features/mcp-tools";
 
 /**
  * Registry-wide behavioural sweep for the folder-exclusion policy
@@ -66,6 +67,7 @@ function pluginWithFolders(folders?: string[]): McpToolsPlugin {
 
 async function compose(folders?: string[]) {
   return composeToolRegistry({
+    registerTools,
     app: mockApp(),
     plugin: pluginWithFolders(folders),
     pluginVersion: "0.0.0-test",
