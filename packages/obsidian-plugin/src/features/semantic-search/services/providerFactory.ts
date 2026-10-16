@@ -17,7 +17,7 @@
  * factory falls back to the native provider (degraded but safe).
  */
 
-import type McpToolsPlugin from "$/main";
+import type { SemanticHost } from "../types";
 import type { SemanticSearchProvider } from "$/features/semantic-search";
 import type { SemanticSearchSettings } from "$/features/semantic-search/types";
 import type { EmbeddingProvider } from "$/features/semantic-search/types";
@@ -41,7 +41,7 @@ export const ALL_PROVIDER_KEYS = [
 export type ProviderKey = (typeof ALL_PROVIDER_KEYS)[number];
 
 export type ProviderFactoryDeps = {
-  plugin: McpToolsPlugin;
+  plugin: SemanticHost;
   embedder: Embedder;
   store: EmbeddingStore;
   excerptResolver?: ExcerptResolver;
@@ -58,7 +58,7 @@ export type ProviderChooser = (
  * Probe whether the Smart Connections plugin's SmartSearch surface
  * is loaded and ready to be called.
  */
-export function isSmartConnectionsAvailable(plugin: McpToolsPlugin): boolean {
+export function isSmartConnectionsAvailable(plugin: SemanticHost): boolean {
   const sc = (plugin as unknown as { smartSearch?: { search?: unknown } })
     .smartSearch;
   return typeof sc?.search === "function";

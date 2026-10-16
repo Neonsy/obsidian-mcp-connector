@@ -99,6 +99,44 @@ describe("registration", () => {
     expect(names).toContain("rename_vault_file");
   });
 
+  test("search_vault_smart is registered only when a semantic host is given", async () => {
+    const base = {
+      app: {} as App,
+      plugin: {} as never,
+      pluginVersion: "0.0.0-test",
+      getLocalTransport: () => undefined,
+    };
+    const without = new ToolRegistryClass();
+    await registerVaultTools(without, base);
+    expect(without.list().tools.map((t) => t.name)).not.toContain(
+      "search_vault_smart",
+    );
+
+    const host = { semanticSearchState: undefined } as never;
+    const withHost = new ToolRegistryClass();
+    await registerVaultTools(withHost, { ...base, semanticSearchHost: host });
+    expect(withHost.list().tools.map((t) => t.name)).toContain(
+      "search_vault_smart",
+    );
+  });
+
+  test("the registered search_vault_smart reads the given host's state", async () => {
+    const registry = new ToolRegistryClass();
+    await registerVaultTools(registry, {
+      app: {} as App,
+      plugin: {} as never,
+      pluginVersion: "0.0.0-test",
+      getLocalTransport: () => undefined,
+      semanticSearchHost: {} as never,
+    });
+    const result = (await registry.dispatch(
+      { name: "search_vault_smart", arguments: { query: "dough" } },
+      {} as never,
+    )) as Result;
+    expect(result.isError).toBe(true);
+    expect(json(result).errorCode).toBe("semantic_search_unavailable");
+  });
+
   test("the search description does not claim Obsidian's scorer everywhere", () => {
     const description = JSON.stringify(
       tools.search.searchFilesByNameSchema.toJsonSchema(),

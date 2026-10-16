@@ -492,6 +492,32 @@ describe("search_vault_smart — structured index_building error (#344)", () => 
     expect(spy.calls()).toHaveLength(0);
   });
 
+  test("indexer refused by the host: unavailable with its reason, provider.search never called", async () => {
+    const spy = fakeProvider({ ready: true });
+    const state = {
+      provider: spy.provider,
+      settings: { provider: "native", indexingMode: "live" },
+      unavailableReason: undefined as string | undefined,
+      startIndexerIfNeeded: () => {
+        state.unavailableReason = "another process owns the index";
+      },
+    };
+    const plugin = mockPlugin({ semanticSearchState: state } as never);
+
+    const result = await searchVaultSmartHandler({
+      arguments: { query: "x" },
+      app: mockApp(),
+      plugin,
+    });
+    expect(result.isError).toBe(true);
+    const parsed = JSON.parse(result.content[0]?.text ?? "{}");
+    expect(parsed.errorCode).toBe("semantic_search_unavailable");
+    expect(parsed.error ?? parsed.message ?? result.content[0]?.text).toContain(
+      "another process owns the index",
+    );
+    expect(spy.calls()).toHaveLength(0);
+  });
+
   test("native, not building: proceeds to a normal search (regression guard)", async () => {
     const spy = fakeProvider({ ready: true, results: [] });
     const plugin = mockPlugin({

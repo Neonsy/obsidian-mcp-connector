@@ -25,17 +25,22 @@ import {
 import type { ToolRegistrar } from "$/composeToolRegistry";
 import { logger } from "$/shared/logger";
 import { DEFAULT_LOG_LEVEL } from "$/shared/log/logLine";
+import type { SemanticSearchState } from "$/features/semantic-search/setup";
+import type { SemanticHost } from "$/features/semantic-search/types";
 import type { McpHost } from "$/shared/types";
 import manifest from "../../../../manifest.json";
 import { parseArgs, unsupportedNodeReason } from "./args";
 import { createHeadlessApp } from "./headlessApp";
 import {
   checkDataOutsideVault,
+  createExclusionsHost,
   createFileHost,
   createMemoryHost,
   defaultDataPath,
 } from "./hostData";
 import { HEADLESS_INSTRUCTIONS } from "./instructions";
+import { wireHeadlessSemanticSearch } from "./semanticSearch";
+import { createShutdown, unrefTimer } from "./shutdown";
 import { routeConsoleToStderr, stderrLogFs } from "./stderrLogFs";
 
 /** The token id a stdio session is served under; there is no real token. */
@@ -48,23 +53,56 @@ function say(line: string): void {
 }
 
 function onShutdown(cleanup: () => Promise<void>): void {
-  let started = false;
-  const shutdown = () => {
-    if (started) return;
-    started = true;
-    void cleanup()
-      .catch((err: unknown) => say(`Shutdown error: ${String(err)}`))
-      .finally(() => process.exit(0));
-  };
+  const shutdown = createShutdown(cleanup, {
+    exit: (code) => process.exit(code),
+    say,
+    startTimer: unrefTimer,
+  });
   process.once("SIGINT", shutdown);
   process.once("SIGTERM", shutdown);
   process.stdin.once("end", shutdown);
 }
 
-async function serveOverStdio(vaultDir: string): Promise<void> {
+/**
+ * Semantic search with its own in-memory settings, kept apart from the
+ * transport's host: it has nothing to persist, and the HTTP state file
+ * should hold only the token. The folder exclusions are the one thing it
+ * reads from the transport's host, so the index skips what the tools hide.
+ * Nothing downloads until the first `search_vault_smart` call. A failed
+ * setup is logged and leaves the tool unregistered.
+ */
+async function startSemanticSearch(
+  app: McpHost["app"],
+  vaultRealPath: string,
+  transportHost: McpHost,
+): Promise<{ host: SemanticHost; state: SemanticSearchState } | undefined> {
+  const host: SemanticHost = createExclusionsHost(
+    { app, manifest: hostManifest },
+    transportHost,
+  );
+  try {
+    const state = await wireHeadlessSemanticSearch(host, vaultRealPath);
+    if (!state) return undefined;
+    host.semanticSearchState = state;
+    return { host, state };
+  } catch (err) {
+    say(
+      `Semantic search is off: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return undefined;
+  }
+}
+
+async function serveOverStdio(
+  vaultDir: string,
+  semantic: boolean,
+): Promise<void> {
   routeConsoleToStderr();
   const { app, close } = await createHeadlessApp(vaultDir);
   const host = createMemoryHost({ app, manifest: hostManifest });
+  const search = semantic
+    ? await startSemanticSearch(app, await fs.realpath(vaultDir), host)
+    : undefined;
   // No token means no stored policy, and an unknown id would get the
   // restricted "adaptive" profile. A client that spawned this process owns
   // it, so the whole tool set is its surface.
@@ -74,7 +112,7 @@ async function serveOverStdio(vaultDir: string): Promise<void> {
     plugin: host,
     pluginVersion: hostManifest.version,
     serverName: resolveServerName(app, undefined),
-    registerTools: registrarFor(() => undefined),
+    registerTools: registrarFor(() => undefined, search?.host),
     instructions: HEADLESS_INSTRUCTIONS,
   });
   const handle = serveStdio((ctx) =>
@@ -86,6 +124,7 @@ async function serveOverStdio(vaultDir: string): Promise<void> {
   onShutdown(async () => {
     await handle.close();
     await destroyMcpService(service);
+    await search?.state.teardown();
     close();
     await logger.flush();
   });
@@ -93,7 +132,12 @@ async function serveOverStdio(vaultDir: string): Promise<void> {
 
 async function serveOverHttp(
   vaultDir: string,
-  options: { port?: number; data?: string; printToken: boolean },
+  options: {
+    port?: number;
+    data?: string;
+    printToken: boolean;
+    semantic: boolean;
+  },
 ): Promise<void> {
   const real = await fs.realpath(vaultDir);
   const dataFile = await checkDataOutsideVault(
@@ -115,22 +159,28 @@ async function serveOverHttp(
 
   const { app, close } = await createHeadlessApp(real);
   const host = await createFileHost({ app, manifest: hostManifest }, dataFile);
+  const search = options.semantic
+    ? await startSemanticSearch(app, real, host)
+    : undefined;
   let boundPort: number | undefined;
   const result = await setupTransport(host, {
-    registerTools: registrarFor(() =>
-      boundPort === undefined
-        ? undefined
-        : {
-            protocol: "http",
-            host: "127.0.0.1",
-            port: boundPort,
-            path: "/mcp",
-          },
+    registerTools: registrarFor(
+      () =>
+        boundPort === undefined
+          ? undefined
+          : {
+              protocol: "http",
+              host: "127.0.0.1",
+              port: boundPort,
+              path: "/mcp",
+            },
+      search?.host,
     ),
     instructions: HEADLESS_INSTRUCTIONS,
     ports: options.port === undefined ? undefined : [options.port],
   });
   if (!result.success) {
+    await search?.state.teardown();
     close();
     throw new Error(result.error);
   }
@@ -140,6 +190,7 @@ async function serveOverHttp(
   say(`Bearer token: run with --http --print-token (state file: ${dataFile})`);
   onShutdown(async () => {
     await teardown(result.state);
+    await search?.state.teardown();
     close();
     await logger.flush();
   });
@@ -149,6 +200,7 @@ function registrarFor(
   getLocalTransport: Parameters<
     typeof registerVaultTools
   >[1]["getLocalTransport"],
+  semanticSearchHost?: SemanticHost,
 ): ToolRegistrar {
   return (registry, ctx) =>
     registerVaultTools(registry, {
@@ -156,6 +208,7 @@ function registrarFor(
       plugin: ctx.plugin,
       pluginVersion: ctx.pluginVersion,
       getLocalTransport,
+      semanticSearchHost,
     });
 }
 
@@ -178,7 +231,7 @@ async function main(): Promise<void> {
   }
   logger.configure({ dir: "", level: DEFAULT_LOG_LEVEL, fs: stderrLogFs });
   if (args.http) await serveOverHttp(args.vault, args);
-  else await serveOverStdio(args.vault);
+  else await serveOverStdio(args.vault, args.semantic);
 }
 
 main().catch((err: unknown) => {

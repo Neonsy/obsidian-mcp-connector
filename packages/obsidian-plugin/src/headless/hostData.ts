@@ -28,6 +28,47 @@ export function createMemoryHost(parts: HostParts): McpHost {
 }
 
 /**
+ * Settings kept in memory, except the `mcpTools` slice (the folder
+ * exclusions), which is always read from `source`. Semantic search uses
+ * it so its own settings never reach the HTTP state file while the index
+ * still honors the exclusions the tools enforce. Writes to `mcpTools` are
+ * dropped: this host never owns that slice.
+ */
+export function createExclusionsHost(
+  parts: HostParts,
+  source: McpHost,
+): McpHost {
+  let own: Record<string, unknown> = {};
+  return {
+    ...parts,
+    loadData: async () => {
+      const shared = (await source.loadData()) as
+        | Record<string, unknown>
+        | null
+        | undefined;
+      const mcpTools = shared?.mcpTools;
+      return mcpTools === undefined ? { ...own } : { ...own, mcpTools };
+    },
+    saveData: async (next) => {
+      const { mcpTools: _dropped, ...rest } = (next ?? {}) as Record<
+        string,
+        unknown
+      >;
+      own = rest;
+    },
+  };
+}
+
+/** `<vault-name>-<8 hex of the vault's realpath hash>`: distinct per vault path. */
+function vaultKey(vaultRealPath: string): string {
+  const hash = createHash("sha256")
+    .update(vaultRealPath)
+    .digest("hex")
+    .slice(0, 8);
+  return `${path.basename(vaultRealPath)}-${hash}`;
+}
+
+/**
  * `<config>/obsidian-mcp-connector/<vault-name>-<8 hex of the vault's
  * realpath hash>.json`, where `<config>` is $XDG_CONFIG_HOME or ~/.config.
  * Two vaults with the same folder name get distinct files.
@@ -37,15 +78,31 @@ export function defaultDataPath(
   env: Record<string, string | undefined> = process.env,
 ): string {
   const config = env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config");
-  const hash = createHash("sha256")
-    .update(vaultRealPath)
-    .digest("hex")
-    .slice(0, 8);
   return path.join(
     config,
     "obsidian-mcp-connector",
-    `${path.basename(vaultRealPath)}-${hash}.json`,
+    `${vaultKey(vaultRealPath)}.json`,
   );
+}
+
+/**
+ * `<cache>/obsidian-mcp-connector`, where `<cache>` is $XDG_CACHE_HOME or
+ * ~/.cache. Holds what every vault shares (downloaded models, the ONNX
+ * runtime files) and one folder per vault.
+ */
+export function defaultCacheRoot(
+  env: Record<string, string | undefined> = process.env,
+): string {
+  const cache = env.XDG_CACHE_HOME || path.join(os.homedir(), ".cache");
+  return path.join(cache, "obsidian-mcp-connector");
+}
+
+/** The cache folder of one vault: `<cache root>/<vault-name>-<8 hex>`. */
+export function defaultCachePath(
+  vaultRealPath: string,
+  env: Record<string, string | undefined> = process.env,
+): string {
+  return path.join(defaultCacheRoot(env), vaultKey(vaultRealPath));
 }
 
 const SEPARATORS = path.sep === "\\" ? /[\\/]/ : "/";

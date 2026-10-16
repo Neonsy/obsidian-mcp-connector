@@ -29,7 +29,7 @@ import type { EmbeddingProvider } from "../types";
 
 export type { ChunkerFn };
 
-export type VaultEvent = "modify" | "create" | "delete";
+export type VaultEvent = "modify" | "create" | "delete" | "rename";
 
 export interface VaultLike {
   /**
@@ -49,8 +49,15 @@ export interface VaultLike {
    * without it, live-edited files simply don't get a persisted mtime.
    */
   getFileMtime?(path: string): number | undefined;
-  /** Returns an unsubscribe function. */
-  on(event: VaultEvent, handler: (path: string) => void): () => void;
+  /**
+   * Returns an unsubscribe function. A `rename` handler also receives
+   * the path the file had before; the host emits it for files only
+   * (extension-agnostic), never for folders.
+   */
+  on(
+    event: VaultEvent,
+    handler: (path: string, oldPath?: string) => void,
+  ): () => void;
 }
 
 export type LiveIndexerOpts = {
@@ -116,15 +123,24 @@ export interface SemanticIndexer {
   pending(): number;
 }
 
+const isMarkdownPath = (path: string): boolean => path.endsWith(".md");
+
 const DEFAULT_DEBOUNCE_MS = 2000;
 const DEFAULT_FLUSH_DEBOUNCE_MS = 5000;
 
 class LiveIndexerImpl implements SemanticIndexer {
-  private timers = new Map<string, number>();
+  private timers = new Map<string, ReturnType<typeof globalThis.setTimeout>>();
   private inFlight = new Map<string, Promise<void>>();
   private unsubs: Array<() => void> = [];
   private running = false;
-  private flushTimer: number | null = null;
+  /**
+   * Bumped by `stop()`. A start or rebuild remembers the value it began
+   * under and bails out after any await that finds it changed, so a
+   * stop that lands mid-start is not undone by the start resuming.
+   */
+  private epoch = 0;
+  private startInFlight: Promise<void> | null = null;
+  private flushTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
   private flushInFlight: Promise<void> | null = null;
   private readonly debounceMs: number;
   private readonly flushDebounceMs: number;
@@ -139,17 +155,36 @@ class LiveIndexerImpl implements SemanticIndexer {
   async start(opts: StartOpts = {}): Promise<void> {
     if (this.running) return;
     this.running = true;
+    const run = this.runStart(opts, this.epoch);
+    this.startInFlight = run;
+    try {
+      await run;
+    } finally {
+      if (this.startInFlight === run) this.startInFlight = null;
+    }
+  }
 
+  private async runStart(opts: StartOpts, epoch: number): Promise<void> {
     // With lazy store loading the store may not be initialized yet.
     // processOnePath reads recordsFor() (sync, no defensive init): on
     // an un-inited store it would see zero records and silently
     // re-embed the whole vault. Idempotent, cheap when already inited.
     await this.opts.store.init();
+    if (epoch !== this.epoch) return;
 
     this.unsubs.push(
       this.opts.vault.on("modify", (p) => this.schedule(p)),
       this.opts.vault.on("create", (p) => this.schedule(p)),
       this.opts.vault.on("delete", (p) => this.schedule(p)),
+      // Obsidian emits only `rename` (never create/delete) when a file
+      // moves: drop the old path's records, index the new path. A
+      // folder rename arrives as one `rename` per file inside it.
+      this.opts.vault.on("rename", (p, oldPath) => {
+        if (oldPath !== undefined && isMarkdownPath(oldPath)) {
+          this.schedule(oldPath);
+        }
+        if (isMarkdownPath(p)) this.schedule(p);
+      }),
     );
 
     if (opts.initialRebuild !== false) {
@@ -161,10 +196,15 @@ class LiveIndexerImpl implements SemanticIndexer {
 
   async stop(): Promise<void> {
     this.running = false;
-    for (const t of this.timers.values()) window.clearTimeout(t);
+    this.epoch++;
+    for (const t of this.timers.values()) globalThis.clearTimeout(t);
     this.timers.clear();
     for (const u of this.unsubs) u();
     this.unsubs = [];
+    // A start still waiting on the store would otherwise install its
+    // subscriptions and begin embedding after the caller closed the
+    // store. It sees the new epoch and returns; wait for that.
+    await this.startInFlight?.catch(() => {});
     // Wait for any in-flight processing to finish so the store is
     // not mid-mutation when the caller drops it.
     await Promise.all(this.inFlight.values());
@@ -179,24 +219,34 @@ class LiveIndexerImpl implements SemanticIndexer {
 
   async rebuildAll(opts: RebuildOpts = {}): Promise<void> {
     const force = opts.force ?? true;
+    const epoch = this.epoch;
     if (!(await this.opts.embedder.isAvailable())) {
       logger.warn(
         "live indexer: embedding provider not available, skipping rebuild",
       );
       return;
     }
+    if (epoch !== this.epoch) return;
     // See start(): guard against recordsFor() on an un-inited store.
     await this.opts.store.init();
-    const files = this.opts.vault
-      .getMarkdownFiles()
-      .filter((f) => !this.isExcluded(f.path));
+    if (epoch !== this.epoch) return;
+    const present = this.opts.vault.getMarkdownFiles();
+    const files = present.filter((f) => !this.isExcluded(f.path));
+    // A file renamed or deleted while no indexer was listening leaves
+    // records nothing will ever replace. Paths still in the vault are
+    // kept even when excluded, per the leave-in-place rule on schedule().
+    const presentPaths = new Set(present.map((f) => f.path));
+    const pruned = await this.opts.store.purge((p) => !presentPaths.has(p));
+    if (epoch !== this.epoch) return;
     logger.info("live indexer: rebuildAll starting", {
+      pruned,
       providerKey: this.opts.embedder.providerKey,
       fileCount: files.length,
       force,
     });
     let skipped = 0;
     for (const f of files) {
+      if (epoch !== this.epoch) return;
       // Session-start pass: a file whose persisted mtime matches and
       // whose records are present is current — skip the read entirely.
       // The hasRecords guard self-heals a stale sidecar (e.g. records
@@ -224,7 +274,7 @@ class LiveIndexerImpl implements SemanticIndexer {
     // Fire every pending timer immediately and wait for all the
     // resulting processing to settle.
     const pending = Array.from(this.timers.entries());
-    for (const [, t] of pending) window.clearTimeout(t);
+    for (const [, t] of pending) globalThis.clearTimeout(t);
     this.timers.clear();
     await Promise.all(
       pending.map(async ([path]) => {
@@ -253,8 +303,8 @@ class LiveIndexerImpl implements SemanticIndexer {
     // cleanup is the manual Rebuild.
     if (this.isExcluded(path)) return;
     const existing = this.timers.get(path);
-    if (existing) window.clearTimeout(existing);
-    const handle = window.setTimeout(() => {
+    if (existing) globalThis.clearTimeout(existing);
+    const handle = globalThis.setTimeout(() => {
       this.timers.delete(path);
       this.processFile(path).catch((err) => {
         logger.error("live indexer: process failed", {
@@ -295,8 +345,8 @@ class LiveIndexerImpl implements SemanticIndexer {
   }
 
   private scheduleFlush(): void {
-    if (this.flushTimer) window.clearTimeout(this.flushTimer);
-    this.flushTimer = window.setTimeout(() => {
+    if (this.flushTimer) globalThis.clearTimeout(this.flushTimer);
+    this.flushTimer = globalThis.setTimeout(() => {
       this.flushTimer = null;
       this.flushInFlight = this.runFlush();
     }, this.flushDebounceMs);
@@ -331,7 +381,7 @@ class LiveIndexerImpl implements SemanticIndexer {
    */
   private async drainFlush(): Promise<void> {
     if (this.flushTimer) {
-      window.clearTimeout(this.flushTimer);
+      globalThis.clearTimeout(this.flushTimer);
       this.flushTimer = null;
       this.flushInFlight = this.runFlush();
     }
@@ -382,7 +432,7 @@ const DEFAULT_LOW_POWER_INTERVAL_MS = 5 * 60 * 1000;
  * skipped because the hash matches an existing record).
  */
 class LowPowerIndexerImpl implements SemanticIndexer {
-  private timer: number | null = null;
+  private timer: ReturnType<typeof globalThis.setInterval> | null = null;
   private running = false;
   private cycleInFlight: Promise<void> | null = null;
   private lastSeenMtime = new Map<string, number>();
@@ -404,7 +454,10 @@ class LowPowerIndexerImpl implements SemanticIndexer {
     if (opts.initialRebuild !== false) {
       await this.runCycle();
     }
-    this.timer = window.setInterval(() => {
+    // stop() during the first cycle must not be undone by an interval
+    // installed after it.
+    if (!this.running) return;
+    this.timer = globalThis.setInterval(() => {
       // Skip if a cycle is still in flight to avoid stacking.
       if (this.cycleInFlight) return;
       this.runCycle().catch((err) => {
@@ -418,7 +471,7 @@ class LowPowerIndexerImpl implements SemanticIndexer {
   async stop(): Promise<void> {
     this.running = false;
     if (this.timer) {
-      window.clearInterval(this.timer);
+      globalThis.clearInterval(this.timer);
       this.timer = null;
     }
     if (this.cycleInFlight) await this.cycleInFlight;
@@ -503,6 +556,11 @@ class LowPowerIndexerImpl implements SemanticIndexer {
           this.lastSeenMtime.delete(knownPath);
         }
       }
+
+      // Paths deleted or renamed before this process started are not in
+      // `lastSeenMtime`, so the loop above cannot see them. Excluded
+      // files are in `seenPaths` and stay, as above.
+      await this.opts.store.purge((p) => !seenPaths.has(p));
 
       await this.opts.store.flush();
     })();

@@ -19,7 +19,7 @@
  * testable).
  */
 
-import type McpToolsPlugin from "$/main";
+import type { SemanticHost } from "../types";
 import type { SmartConnections } from "shared";
 import type {
   SearchOpts,
@@ -65,7 +65,7 @@ type RawSmartSearchResult = {
  * function does not care which version surfaced it.
  */
 function getSmartSearch(
-  plugin: McpToolsPlugin,
+  plugin: SemanticHost,
 ): SmartConnections.SmartSearch | undefined {
   return (plugin as unknown as { smartSearch?: SmartConnections.SmartSearch })
     .smartSearch;
@@ -81,7 +81,7 @@ export class SmartConnectionsUnavailableError extends Error {
 }
 
 class SmartConnectionsProviderImpl implements SemanticSearchProvider {
-  constructor(private plugin: McpToolsPlugin) {}
+  constructor(private plugin: SemanticHost) {}
 
   isReady(): boolean {
     const sc = getSmartSearch(this.plugin);
@@ -124,7 +124,7 @@ function makeExcerpt(body: string): string {
 }
 
 export function createSmartConnectionsProvider(
-  plugin: McpToolsPlugin,
+  plugin: SemanticHost,
 ): SemanticSearchProvider {
   return new SmartConnectionsProviderImpl(plugin);
 }

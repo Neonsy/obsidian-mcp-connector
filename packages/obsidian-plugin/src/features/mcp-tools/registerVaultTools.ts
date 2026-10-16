@@ -91,6 +91,12 @@ import {
 } from "./tools/searchFilesByName";
 import { searchVaultHandler, searchVaultSchema } from "./tools/searchVault";
 import {
+  searchVaultSmartHandler,
+  searchVaultSmartSchema,
+  type SearchVaultSmartContext,
+} from "./tools/searchVaultSmart";
+import type { SemanticHost } from "$/features/semantic-search/types";
+import {
   searchVaultSimpleHandler,
   searchVaultSimpleSchema,
 } from "./tools/searchVaultSimple";
@@ -167,6 +173,12 @@ export type RegisterVaultToolsContext = {
    * registration time the HTTP server has not bound yet.
    */
   getLocalTransport: () => LocalTransportInfo | undefined;
+  /**
+   * Register `search_vault_smart` for this host. Omitted, the tool is
+   * not registered. The host carries `semanticSearchState`, which the
+   * caller assigns once the feature is wired.
+   */
+  semanticSearchHost?: SemanticHost;
 };
 
 /**
@@ -356,6 +368,26 @@ export async function registerVaultTools(
         hasUiCapability,
       }),
   );
+
+  const semanticHost = ctx.semanticSearchHost;
+  if (semanticHost) {
+    registry.register(
+      searchVaultSmartSchema,
+      async (params, { sendNotification, hasUiCapability }) =>
+        searchVaultSmartHandler({
+          arguments: (
+            params as { arguments: SearchVaultSmartContext["arguments"] }
+          ).arguments,
+          app: ctx.app,
+          plugin: semanticHost,
+          progressToken: (
+            params as { _meta?: { progressToken?: string | number } }
+          )._meta?.progressToken,
+          sendNotification,
+          hasUiCapability,
+        }),
+    );
+  }
 
   // Covers the meta-tools registered later in mcpServer.ts too:
   // annotations are looked up by name at list() time.

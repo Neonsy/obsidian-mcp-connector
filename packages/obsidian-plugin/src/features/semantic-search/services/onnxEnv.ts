@@ -27,7 +27,10 @@
  *   restricted. Single-threaded non-JSEP WASM avoids the worker spin-up path.
  *   Omitted on the WebGPU path so onnxruntime-web selects JSEP WASM instead.
  * * `env.useBrowserCache = true`: persist the downloaded model to the
- *   Cache API so subsequent loads are fast.
+ *   Cache API so subsequent loads are fast. Gated on `caches`, not
+ *   `navigator`: Node 24 defines `navigator` but has no Cache API, so a
+ *   navigator check would pick the browser cache and fail under the
+ *   headless server.
  *
  * Bundle prerequisite: `bun.config.ts` redirects `onnxruntime-web` →
  * `onnxruntime-web/all` (ort.all.min.js). The default `ort.min.js` includes
@@ -44,6 +47,17 @@ import { logger } from "$/shared/logger";
 // Stable build; required for ONNX IR v10 support (onnxruntime-web ≥ 1.20).
 const ORT_WASM_PATHS =
   "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.26.0/dist/";
+
+/**
+ * Host seam: a host whose ORT glue cannot be imported from a CDN URL
+ * (plain Node accepts only `file:` for `import()`) points it at a local
+ * directory URL (`file:///.../`) before the first embed. Desktop never
+ * calls this.
+ */
+let wasmPathsOverride: string | undefined;
+export function setWasmPaths(prefix: string): void {
+  wasmPathsOverride = prefix;
+}
 
 type HfEnv = {
   backends?: {
@@ -65,15 +79,22 @@ let _webgpuEnvConfigured = false;
 
 function applyCommon(e: HfEnv): void {
   if (e.backends?.onnx?.wasm) {
-    e.backends.onnx.wasm.wasmPaths = ORT_WASM_PATHS;
+    e.backends.onnx.wasm.wasmPaths = wasmPathsOverride ?? ORT_WASM_PATHS;
   } else {
     logger.warn(
       "onnxEnv: expected WASM backend shape not found — CDN paths not configured",
     );
   }
-  if (typeof navigator !== "undefined") {
+  if (typeof caches !== "undefined") {
     e.useBrowserCache = true;
   }
+}
+
+/** Test-only: forget which paths have been configured. */
+export function __resetEnvForTesting(): void {
+  _cpuEnvConfigured = false;
+  _webgpuEnvConfigured = false;
+  wasmPathsOverride = undefined;
 }
 
 export function configureEnv(): void {

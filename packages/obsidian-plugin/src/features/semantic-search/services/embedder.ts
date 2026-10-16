@@ -93,6 +93,14 @@ export type EmbedderOpts = {
   cacheSize?: number;
   idleMs?: number;
   unloadWhenIdle?: boolean;
+  /**
+   * Host seam for a single-threaded host that must keep its event loop
+   * responsive (the headless server). `size` replaces the batch size and
+   * `yieldBetweenBatches` runs after each batch, which then also runs one
+   * at a time instead of all at once. Omitted on the desktop: batches of
+   * 8, launched together, as before.
+   */
+  batching?: { size: number; yieldBetweenBatches: () => Promise<void> };
 };
 
 class EmbedderImpl implements Embedder {
@@ -104,7 +112,7 @@ class EmbedderImpl implements Embedder {
   // it but never writes (document chunks must not evict query entries);
   // within-batch duplicate identity comes from embedBatch's dedupe map.
   private cache = new Map<string, Promise<Float32Array>>();
-  private idleTimer: number | null = null;
+  private idleTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
 
   constructor(private opts: EmbedderOpts) {}
 
@@ -171,8 +179,10 @@ class EmbedderImpl implements Embedder {
     });
 
     const entries = Array.from(missing.entries());
-    for (let start = 0; start < entries.length; start += EMBED_BATCH_SIZE) {
-      const slice = entries.slice(start, start + EMBED_BATCH_SIZE);
+    const batching = this.opts.batching;
+    const batchSize = batching?.size ?? EMBED_BATCH_SIZE;
+    for (let start = 0; start < entries.length; start += batchSize) {
+      const slice = entries.slice(start, start + batchSize);
       const batchTexts = slice.map(([text]) => text);
       const batchPromise = (async (): Promise<Float32Array[]> => {
         const pipe = await this.ensurePipeline();
@@ -208,6 +218,18 @@ class EmbedderImpl implements Embedder {
         });
         for (const pos of positions) results[pos] = rowPromise;
       });
+      if (batching) {
+        // One batch at a time, with the event loop given a turn in
+        // between. A failed batch ends the loop: its rejection reaches
+        // the caller through `results`, and launching the rest would
+        // only retry the same failing pipeline load once per batch.
+        const ok = await batchPromise.then(
+          () => true,
+          () => false,
+        );
+        if (!ok) break;
+        await batching.yieldBetweenBatches();
+      }
     }
 
     return Promise.all(results);
@@ -221,7 +243,7 @@ class EmbedderImpl implements Embedder {
     // freshly constructed pipeline.
     this.cache.clear();
     if (this.idleTimer) {
-      window.clearTimeout(this.idleTimer);
+      globalThis.clearTimeout(this.idleTimer);
       this.idleTimer = null;
     }
   }
@@ -261,8 +283,8 @@ class EmbedderImpl implements Embedder {
     // silently disconnected the unloadModelWhenIdle setting and made
     // every search after 60s idle pay a cold pipeline rebuild.
     if (this.opts.unloadWhenIdle !== true) return;
-    if (this.idleTimer) window.clearTimeout(this.idleTimer);
-    this.idleTimer = window.setTimeout(() => {
+    if (this.idleTimer) globalThis.clearTimeout(this.idleTimer);
+    this.idleTimer = globalThis.setTimeout(() => {
       this.pipeline = null;
       this.loadPromise = null;
       this.idleTimer = null;

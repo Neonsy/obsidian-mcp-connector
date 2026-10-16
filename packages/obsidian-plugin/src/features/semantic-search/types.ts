@@ -1,4 +1,6 @@
 import { type } from "arktype";
+import type { McpHost } from "$/shared/types";
+import type { SemanticSearchState } from "./setup";
 
 /**
  * Active inference runtime. Resolved once per process by
@@ -10,6 +12,17 @@ import { type } from "arktype";
  *   effective context windows for models that intrinsically support them.
  */
 export type BackendKind = "wasm" | "webgpu";
+
+/**
+ * What semantic search needs from its host: the Obsidian plugin on the
+ * desktop, a vault-directory shim in the headless server. Structural, so
+ * the feature imports neither. `smartSearch` is only ever set by the
+ * desktop plugin when Smart Connections is loaded.
+ */
+export type SemanticHost = McpHost & {
+  semanticSearchState?: SemanticSearchState;
+  smartSearch?: unknown;
+};
 
 /**
  * Embedding layer abstraction. One `EmbeddingProvider` per model;

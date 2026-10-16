@@ -34,11 +34,6 @@ import {
   getWorkspaceStateSchema,
 } from "./tools/getWorkspaceState";
 import {
-  searchVaultSmartHandler,
-  searchVaultSmartSchema,
-  type SearchVaultSmartContext,
-} from "./tools/searchVaultSmart";
-import {
   listObsidianCommandsHandler,
   listObsidianCommandsSchema,
 } from "./tools/listObsidianCommands";
@@ -86,6 +81,7 @@ export async function registerTools(
     app: ctx.app,
     plugin: ctx.plugin,
     pluginVersion: ctx.pluginVersion,
+    semanticSearchHost: ctx.plugin,
     getLocalTransport: () => {
       // Lazy: at registration time the HTTP server has not bound yet,
       // so plugin.mcpTransportState is undefined. By tool-call time
@@ -137,22 +133,6 @@ export async function registerTools(
   );
   registry.register(listBookmarksSchema, async ({ arguments: args }) =>
     listBookmarksHandler({ arguments: args, app: ctx.app }),
-  );
-  registry.register(
-    searchVaultSmartSchema,
-    async (params, { sendNotification, hasUiCapability }) =>
-      searchVaultSmartHandler({
-        arguments: (
-          params as { arguments: SearchVaultSmartContext["arguments"] }
-        ).arguments,
-        app: ctx.app,
-        plugin: ctx.plugin,
-        progressToken: (
-          params as { _meta?: { progressToken?: string | number } }
-        )._meta?.progressToken,
-        sendNotification,
-        hasUiCapability,
-      }),
   );
   registry.register(executeDataviewQuerySchema, async ({ arguments: args }) =>
     executeDataviewQueryHandler({ arguments: args, app: ctx.app }),

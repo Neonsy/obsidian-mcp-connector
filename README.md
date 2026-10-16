@@ -588,21 +588,35 @@ Without `PATH`, give the absolute path of the file instead: `node /absolute/path
 
 ### What works
 
-These tools are served, 47 in all with the three adaptive-loading meta-tools:
+These tools are served, 48 in all with the three adaptive-loading meta-tools (47 with `--no-semantic`):
 
 - Files: `list_vault_files`, `get_vault_file`, `get_vault_files`, `get_vault_file_partial`, `create_vault_file`, `create_vault_binary_file`, `append_to_vault_file`, `patch_vault_file`, `delete_vault_file`, `rename_vault_file`, `create_vault_directory`, `delete_vault_directory`, `search_and_replace`, `get_file_info`, `list_attachments`, `get_recent_files`, `get_vault_overview`
-- Search: `search_files_by_name`, `search_vault_simple`, and `search_vault` with JsonLogic queries (a Dataview query returns `dataview_not_installed`)
+- Search: `search_files_by_name`, `search_vault_simple`, `search_vault_smart` (see [Semantic search](#semantic-search)), and `search_vault` with JsonLogic queries (a Dataview query returns `dataview_not_installed`)
 - Properties and tags: `get_note_property`, `get_note_properties`, `set_note_property`, `delete_note_property`, `update_note_properties`, `list_property_values`, `list_tags`, `get_files_by_tag`, `rename_tag`
 - Structure and tasks: `get_note_outline`, `rename_heading`, `ensure_block_id`, `list_tasks`, `set_task_status`
 - Links: `get_outgoing_links`, `find_broken_links`, `get_backlinks`, `find_orphaned_notes`
 - Canvas: `get_canvas`, `add_canvas_node`, `connect_canvas_nodes`, `update_canvas_node`, `delete_canvas_node`
 - Server and loading: `get_server_info`, `tool_catalog`, `activate_tool`, `activate_tools`
 
-Not served, because they need the desktop app or a plugin: `fetch`, the daily and periodic note tools, every workspace, active-file, command, Dataview, Templater and bookmark tool, and `search_vault_smart`. Semantic search in headless mode is planned.
+Not served, because they need the desktop app or a plugin: `fetch`, the daily and periodic note tools, every workspace, active-file, command, Dataview, Templater and bookmark tool.
 
 The server reads tags, links, headings, blocks and tasks with its own parser, which follows Obsidian's rules closely but is not Obsidian's. Edits made outside the server (an editor, a sync client, `git pull`) are picked up by a file watcher within a fraction of a second. Folders whose name starts with a dot, such as `.obsidian` and `.git`, are neither read nor written, and a path that leads outside the vault folder is refused. Symlinks inside the vault are ignored. A tool that trashes a file or folder moves it to `.trash/` in the vault. Obsidian's "Excluded files" setting does not apply.
 
 `search_files_by_name` ranks with its own fuzzy scorer, which follows Obsidian's quick switcher in spirit (in-order characters, contiguous runs and word starts rank higher) but gives different scores. `rename_vault_file` moves a file or folder and rewrites the links to it in every other note: wikilinks, embeds, markdown links (URL-encoded and `<angle bracket>` paths too) and frontmatter links, each keeping its own style, with subpaths and aliases intact. Relative links inside a moved note are recomputed so they still reach the same files. If the move succeeds but a note cannot be rewritten, the error names that note. Links inside canvases and `.base` files are not rewritten, and the link style is taken from each link, not from Obsidian's Files & Links settings.
+
+### Semantic search
+
+`search_vault_smart` ranks notes by meaning, with the same native model the plugin uses by default (`Xenova/all-MiniLM-L6-v2`), run on the CPU. It is on by default and nothing is downloaded when the server starts. Pass `--no-semantic` to leave the tool out.
+
+The first call downloads about 36 MB once (the model, about 23 MB, and the ONNX runtime files, about 13 MB), then builds the index in the background. Until the index is ready the call returns an `index_building` error with progress and an estimated retry time, so call again a few seconds later. After that, calls answer from the index, notes you edit are embedded again as they change, and a restart skips every note that has not changed and drops notes that were renamed or deleted meanwhile. Building the first index of 50 notes took about 25 seconds in our test, and the server's memory use rose to about 0.5 GB while the model was loaded.
+
+- **Where files live:** `$XDG_CACHE_HOME/obsidian-mcp-connector/` or, without it, `~/.cache/obsidian-mcp-connector/`. `models/` and `ort-1.26.0/` are shared by all vaults, and `<vault name>-<hash>/embeddings/` is the index of one vault. The index keeps note paths and headings in clear text, so the folders are created with mode `0700` and the index files with `0600`. Delete the folder to start over.
+- **What is downloaded and checked:** the two ONNX runtime files come from the same jsDelivr URL the plugin uses and are checked against a SHA-256 pinned in the server before they are used. The model comes from Hugging Face without a pinned revision, like the plugin. A request that gets no response within 30 seconds is abandoned. If a download fails, for example offline, that call fails and the next call tries again.
+- **CPU:** indexing keeps one core busy. It runs on the server's own thread in steps of one note chunk, so other tool calls are still answered meanwhile, with pauses of a fraction of a second.
+- **One server per index:** the first search takes an operating-system lock on a local socket named after the vault's cache folder. If another headless server already holds it, `search_vault_smart` returns `semantic_search_unavailable`, and a server that exits or crashes frees the lock at once. In HTTP mode the folders listed in `mcpTools.excludedFolders` are never indexed.
+- **Shutdown:** on SIGINT, SIGTERM or the end of stdin the server waits at most 5 seconds for the indexer to stop, then exits and says so on stderr.
+- **Weights:** the headless server loads the 8-bit quantized model (23 MB, against 90 MB at full precision), so scores differ slightly from the plugin's native provider.
+- **Not available:** the plugin's other providers (EmbeddingGemma, multilingual E5, Smart Connections), its semantic search settings and any GPU backend.
 
 ### HTTP service mode
 

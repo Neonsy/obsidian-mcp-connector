@@ -7,7 +7,9 @@
  * and speaks newline-delimited JSON-RPC. Checked in order:
  *   - stdout carries only JSON-RPC messages, also after a JsonLogic `log`
  *     query, which prints through `console.log`;
- *   - `initialize` and `tools/list` answer, and desktop-only tools are absent;
+ *   - `initialize` and `tools/list` answer, desktop-only tools are absent, and
+ *     `search_vault_smart` is listed but nothing is downloaded by starting
+ *     (it is never called here: the first call downloads a model);
  *   - a note reads back;
  *   - a created note is immediately visible to properties, tags and backlinks;
  *   - an edit made outside the server becomes visible, polled against a
@@ -24,7 +26,11 @@
  * its "Listening on" line, so no other process can take it in between): no
  * token is 401, a token lists tools in both protocol eras, SIGTERM exits 0.
  *
- * Nothing here touches any host but 127.0.0.1. Temp dirs are removed.
+ * Then `--no-semantic`, which must leave `search_vault_smart` unlisted.
+ *
+ * Nothing here touches any host but 127.0.0.1. Temp dirs are removed, and
+ * the semantic-search cache is pointed at one of them so the user's own
+ * cache is never read or written.
  */
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import {
@@ -38,6 +44,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { readdirSync } from "node:fs";
 import { WATCH_DEBOUNCE_MS } from "../src/headless/watcher";
 
 const BUNDLE = join(
@@ -51,11 +58,13 @@ const POLL_MS = 50;
 /** Hang guard for a reply or an exit, not a timing assertion. */
 const REPLY_GUARD_MS = 15000;
 
+/** The cache folder the server creates under $XDG_CACHE_HOME. */
+const ROOT_NAME = "obsidian-mcp-connector";
+
 const DESKTOP_ONLY = [
   "get_active_file",
   "execute_obsidian_command",
   "fetch",
-  "search_vault_smart",
   "get_or_create_daily_note",
   "execute_template",
   "execute_dataview_query",
@@ -186,6 +195,10 @@ async function stdioChecks(vault: string): Promise<void> {
     const leaked = DESKTOP_ONLY.filter((n) => names.includes(n));
     check("stdio: desktop-only tools are absent", leaked.length === 0, leaked);
     check(
+      "stdio: search_vault_smart is served",
+      names.includes("search_vault_smart"),
+    );
+    check(
       "stdio: file-name search and rename are served",
       names.includes("search_files_by_name") &&
         names.includes("rename_vault_file"),
@@ -270,10 +283,50 @@ async function stdioChecks(vault: string): Promise<void> {
     });
     check("stdio: stdout carries only JSON-RPC", jsonOnly, client.stdoutLines);
 
+    // Top level only: `models` and `ort-<version>` are made by a download.
+    const cached = readdirSync(join(process.env.XDG_CACHE_HOME!, ROOT_NAME));
+    check(
+      "stdio: starting downloads no model and no runtime files",
+      !cached.some((f) => f === "models" || f.startsWith("ort-")),
+      cached,
+    );
+
     client.child.stdin!.end();
     check("stdio: closing stdin exits 0", (await exited(client.child)) === 0);
   } catch (err) {
     check("stdio: session completed", false, err);
+    client.child.kill("SIGKILL");
+  }
+}
+
+async function noSemanticChecks(vault: string): Promise<void> {
+  const client = new StdioClient(["node", BUNDLE, vault, "--no-semantic"]);
+  try {
+    await client.request("initialize", {
+      protocolVersion: "2025-06-18",
+      capabilities: {},
+      clientInfo: { name: "headless-smoke", version: "0" },
+    });
+    client.notify("notifications/initialized");
+    const list = await client.request("tools/list");
+    const names = (
+      (list.result?.tools as Array<{ name: string }> | undefined) ?? []
+    ).map((t) => t.name);
+    check(
+      "no-semantic: vault tools are served",
+      names.includes("get_vault_file"),
+    );
+    check(
+      "no-semantic: search_vault_smart is not listed",
+      !names.includes("search_vault_smart"),
+    );
+    client.child.stdin!.end();
+    check(
+      "no-semantic: closing stdin exits 0",
+      (await exited(client.child)) === 0,
+    );
+  } catch (err) {
+    check("no-semantic: session completed", false, err);
     client.child.kill("SIGKILL");
   }
 }
@@ -404,6 +457,11 @@ async function httpChecks(vault: string, workDir: string): Promise<void> {
       legacy.status === 200 && legacy.text.includes("get_vault_file"),
       legacy.text.slice(0, 200),
     );
+    check(
+      "http: search_vault_smart is served",
+      legacy.text.includes("search_vault_smart"),
+      legacy.text.slice(0, 200),
+    );
 
     const modern = await post(
       port,
@@ -441,6 +499,8 @@ async function main(): Promise<void> {
     process.exit(1);
   }
   const workDir = mkdtempSync(join(tmpdir(), "headless-smoke-"));
+  // Inherited by every server this script spawns.
+  process.env.XDG_CACHE_HOME = join(workDir, "cache");
   try {
     const stdioVault = join(workDir, "vault-stdio");
     mkdirSync(stdioVault);
@@ -450,6 +510,7 @@ async function main(): Promise<void> {
     );
     await stdioChecks(stdioVault);
     await installedChecks(stdioVault, workDir);
+    await noSemanticChecks(stdioVault);
 
     const httpVault = join(workDir, "vault-http");
     mkdirSync(httpVault);

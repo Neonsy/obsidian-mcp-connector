@@ -6,7 +6,10 @@ import type { App } from "obsidian";
 import {
   checkDataOutsideVault,
   createFileHost,
+  createExclusionsHost,
   createMemoryHost,
+  defaultCachePath,
+  defaultCacheRoot,
   defaultDataPath,
 } from "./hostData";
 
@@ -28,6 +31,23 @@ describe("defaultDataPath", () => {
     );
     expect(a).not.toBe(b);
     expect(defaultDataPath("/one/notes", env)).toBe(a);
+  });
+});
+
+describe("defaultCachePath", () => {
+  test("lives under XDG_CACHE_HOME, one folder per vault path", () => {
+    const env = { XDG_CACHE_HOME: "/cache" };
+    expect(defaultCacheRoot(env)).toBe("/cache/obsidian-mcp-connector");
+    const a = defaultCachePath("/one/notes", env);
+    expect(a).toMatch(/^\/cache\/obsidian-mcp-connector\/notes-[0-9a-f]{8}$/);
+    expect(defaultCachePath("/two/notes", env)).not.toBe(a);
+    expect(defaultCachePath("/one/notes", env)).toBe(a);
+  });
+
+  test("shares its vault key with the state file name", () => {
+    const env = { XDG_CACHE_HOME: "/c", XDG_CONFIG_HOME: "/f" };
+    const key = path.basename(defaultCachePath("/v/notes", env));
+    expect(path.basename(defaultDataPath("/v/notes", env))).toBe(`${key}.json`);
   });
 });
 
@@ -58,6 +78,44 @@ describe("createMemoryHost", () => {
     const host = createMemoryHost(parts);
     await host.saveData({ a: 1 });
     expect(await host.loadData()).toEqual({ a: 1 });
+  });
+});
+
+describe("createExclusionsHost", () => {
+  test("reads mcpTools from the source and keeps every other write in memory", async () => {
+    const file = path.join(dir, "state.json");
+    const source = await createFileHost(parts, file);
+    await source.saveData({ mcpTools: { excludedFolders: ["Hidden"] } });
+    const host = createExclusionsHost(parts, source);
+
+    expect(await host.loadData()).toEqual({
+      mcpTools: { excludedFolders: ["Hidden"] },
+    });
+
+    await host.saveData({
+      mcpTools: { excludedFolders: ["Stale"] },
+      semanticSearch: { provider: "native" },
+    });
+    // The source's slice wins on read, and the state file is untouched.
+    expect(await host.loadData()).toEqual({
+      mcpTools: { excludedFolders: ["Hidden"] },
+      semanticSearch: { provider: "native" },
+    });
+    expect(JSON.parse(fs.readFileSync(file, "utf8"))).toEqual({
+      mcpTools: { excludedFolders: ["Hidden"] },
+    });
+
+    // A later change to the source shows through.
+    await source.saveData({ mcpTools: { excludedFolders: ["Other"] } });
+    expect(await host.loadData()).toEqual({
+      mcpTools: { excludedFolders: ["Other"] },
+      semanticSearch: { provider: "native" },
+    });
+  });
+
+  test("a source without mcpTools yields none", async () => {
+    const host = createExclusionsHost(parts, createMemoryHost(parts));
+    expect(await host.loadData()).toEqual({});
   });
 });
 

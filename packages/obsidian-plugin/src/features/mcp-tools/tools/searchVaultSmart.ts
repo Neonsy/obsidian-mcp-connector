@@ -1,7 +1,7 @@
 import { type } from "arktype";
 import { errorJson, successText } from "../services/responseBuilders";
 import type { App } from "obsidian";
-import type McpToolsPlugin from "$/main";
+import type { SemanticHost } from "$/features/semantic-search/types";
 import { isSmartConnectionsAvailable } from "$/features/semantic-search/services/providerFactory";
 import { createExclusionFilter } from "$/shared/isUserIgnored";
 import {
@@ -51,7 +51,7 @@ export type SearchVaultSmartContext = {
     compact?: boolean;
   };
   app: App;
-  plugin: McpToolsPlugin;
+  plugin: SemanticHost;
   /** Client-supplied `_meta.progressToken` from the original request, if
    * any (#344). A `notifications/progress` push is spec-legal only when
    * this is present. */
@@ -261,7 +261,10 @@ export async function searchVaultSmartHandler(
     settings?.provider === "embedding-gemma" ||
     settings?.provider === "multilingual-e5-base";
   if (!usingSmartConnections && !usingDlcProvider) {
-    state.startIndexerIfNeeded?.();
+    await state.startIndexerIfNeeded?.();
+    if (state.unavailableReason) {
+      return errorJson(state.unavailableReason, "semantic_search_unavailable");
+    }
 
     // #344: the native provider's own lazy first-time build (or a
     // post-reopen catch-up rebuild) — independent of provider.isReady(),

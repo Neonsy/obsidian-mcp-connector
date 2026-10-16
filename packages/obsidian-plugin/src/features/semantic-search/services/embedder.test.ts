@@ -376,6 +376,59 @@ describe("embedder — embedBatch batching", () => {
     expect(shapes[1]).toHaveLength(1);
   });
 
+  test("batching seam: small batches run one at a time with a yield after each", async () => {
+    const { factory, inputs } = makeRecordingFactory();
+    const events: string[] = [];
+    const embedder = createEmbedder({
+      pipelineFactory: async (model) => {
+        const pipe = await factory(model);
+        return async (input, opts) => {
+          events.push("run");
+          const out = await pipe(input, opts);
+          events.push("done");
+          return out;
+        };
+      },
+      batching: {
+        size: 2,
+        yieldBetweenBatches: async () => {
+          events.push("yield");
+        },
+      },
+    });
+    const out = await embedder.embedBatch(["a", "bb", "ccc", "dddd", "e"]);
+    expect(inputs()).toEqual([["a", "bb"], ["ccc", "dddd"], ["e"]]);
+    expect(out.map((v) => v[0])).toEqual([1, 2, 3, 4, 1]);
+    // Never two runs at once, and the loop gets a turn after every batch.
+    expect(events).toEqual([
+      "run",
+      "done",
+      "yield",
+      "run",
+      "done",
+      "yield",
+      "run",
+      "done",
+      "yield",
+    ]);
+  });
+
+  test("batching seam: a failed batch stops the rest and rejects the call", async () => {
+    let loads = 0;
+    const embedder = createEmbedder({
+      pipelineFactory: async () => {
+        loads += 1;
+        throw new Error("offline");
+      },
+      batching: { size: 1, yieldBetweenBatches: async () => {} },
+    });
+    await expect(embedder.embedBatch(["a", "b", "c"])).rejects.toThrow(
+      "offline",
+    );
+    // Without the early exit each batch would retry the failing load.
+    expect(loads).toBe(1);
+  });
+
   test("empty batch returns [] without loading the pipeline", async () => {
     const { factory, callCount } = makeRecordingFactory();
     const embedder = createEmbedder({ pipelineFactory: factory });

@@ -206,7 +206,22 @@ export default class McpToolsPlugin extends Plugin {
     // 0.4.0 semantic search — Phase 3 production wiring, extracted to
     // services/productionWiring.ts for testability.
     try {
-      this.semanticSearchState = await wireSemanticSearch(this);
+      const vault = this.app.vault;
+      this.semanticSearchState = await wireSemanticSearch(this, {
+        adapter: {
+          exists: (p) => vault.adapter.exists(p),
+          read: (p) => vault.adapter.read(p),
+          write: (p, d) => vault.adapter.write(p, d),
+          readBinary: (p) => vault.adapter.readBinary(p),
+          writeBinary: (p, d) => vault.adapter.writeBinary(p, d),
+          remove: (p) => vault.adapter.remove(p),
+          mkdir: (p) => vault.adapter.mkdir(p),
+        },
+        baseDir:
+          this.manifest.dir ??
+          `${this.app.vault.configDir}/plugins/${this.manifest.id}`,
+        notify: (message) => new Notice(message, 8000),
+      });
     } catch (error) {
       logger.error("Semantic search wiring failed", {
         error: error instanceof Error ? error.message : String(error),

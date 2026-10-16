@@ -6,8 +6,8 @@
  * onload() awaits this and assigns the returned state.
  */
 
-import { type EventRef, Notice, TFile } from "obsidian";
-import type McpToolsPlugin from "$/main";
+import { type EventRef, TFile } from "obsidian";
+import type { SemanticHost } from "../types";
 import { logger } from "$/shared/logger";
 import { SettingsStore } from "$/shared/settingsStore";
 import { createExclusionFilter } from "$/shared/isUserIgnored";
@@ -15,10 +15,15 @@ import { pathPolicyFor } from "$/shared/policyProvider";
 import type { PathPolicy } from "$/shared/pathPolicy";
 import {
   setup as semanticSearchSetup,
-  createModelDownloader,
   type SemanticSearchState,
-} from "../index";
-import { createEmbedder, realPipelineFactory } from "./embedder";
+} from "../setup";
+import { createModelDownloader } from "./modelDownloader";
+import {
+  createEmbedder,
+  realPipelineFactory,
+  type DtypeSpec,
+  type PipelineFactoryWithProgress,
+} from "./embedder";
 import { ALL_PROVIDER_KEYS, type ProviderKey } from "./providerFactory";
 import {
   createNativeEmbeddingProvider,
@@ -58,18 +63,52 @@ export function isIndexableFile(f: unknown): f is TFile {
   return f instanceof TFile && f.extension === "md";
 }
 
+/**
+ * What differs between hosts. The desktop plugin passes the vault adapter
+ * and its plugin folder, so embeddings live inside the vault's config
+ * folder. The headless server passes a plain directory outside the vault.
+ */
+export type SemanticDeps = {
+  /** Where the embedding stores are read and written. */
+  adapter: VaultAdapter;
+  /** Folder under `adapter` that holds `embeddings/`. */
+  baseDir: string;
+  /** One-line user notices; omitted by hosts with nobody to show them to. */
+  notify?: (message: string) => void;
+  /** Weight precision for the native model. Omitted: the library default. */
+  nativeDtype?: DtypeSpec;
+  /**
+   * Runs before the native model's first load. The headless server
+   * downloads the ORT runtime files here, so nothing is fetched until
+   * the first search.
+   */
+  beforeModelLoad?: () => Promise<void>;
+  /** Small embed batches with an event-loop turn between them. */
+  embedBatching?: { size: number; yieldBetweenBatches: () => Promise<void> };
+  /**
+   * Asked each time the native indexer is about to start. A refusal
+   * keeps it from starting and is reported to the search tool as the
+   * reason semantic search is unavailable. The headless server uses it
+   * to let one process at a time write a vault's index.
+   *
+   * With a gate, nothing in the index folder is written or removed
+   * before the gate first allows the indexer: the v1 migration and the
+   * format-upgrade wipe wait for it. Without one (the desktop plugin,
+   * which owns its folder) both run during wiring.
+   *
+   * It may answer asynchronously: `startIndexerIfNeeded` then returns a
+   * promise that settles once the answer is acted on.
+   */
+  indexerGate?: () => IndexerGateResult | Promise<IndexerGateResult>;
+};
+
+export type IndexerGateResult = { ok: true } | { ok: false; reason: string };
+
 export async function wireSemanticSearch(
-  plugin: McpToolsPlugin,
+  plugin: SemanticHost,
+  deps: SemanticDeps,
 ): Promise<SemanticSearchState | undefined> {
-  const ssAdapter: VaultAdapter = {
-    exists: (p) => plugin.app.vault.adapter.exists(p),
-    read: (p) => plugin.app.vault.adapter.read(p),
-    write: (p, d) => plugin.app.vault.adapter.write(p, d),
-    readBinary: (p) => plugin.app.vault.adapter.readBinary(p),
-    writeBinary: (p, d) => plugin.app.vault.adapter.writeBinary(p, d),
-    remove: (p) => plugin.app.vault.adapter.remove(p),
-    mkdir: (p) => plugin.app.vault.adapter.mkdir(p),
-  };
+  const ssAdapter: VaultAdapter = deps.adapter;
 
   const ssVault: VaultLike = {
     getMarkdownFiles: () =>
@@ -94,9 +133,21 @@ export async function wireSemanticSearch(
       // contract stays clean.
       const ref = (
         plugin.app.vault as unknown as {
-          on: (event: string, handler: (f: unknown) => void) => EventRef;
+          on: (
+            event: string,
+            handler: (f: unknown, oldPath?: unknown) => void,
+          ) => EventRef;
         }
-      ).on(event, (f: unknown) => {
+      ).on(event, (f: unknown, oldPath?: unknown) => {
+        if (event === "rename") {
+          // Files only, any extension: the indexer needs the old path
+          // even when the new name is no longer markdown. Folders are
+          // skipped, Obsidian also emits one `rename` per file inside.
+          if (f instanceof TFile && typeof oldPath === "string") {
+            handler(f.path, oldPath);
+          }
+          return;
+        }
         if (isIndexableFile(f)) handler(f.path);
       });
       return () => plugin.app.vault.offref(ref);
@@ -123,9 +174,12 @@ export async function wireSemanticSearch(
   await policyProvider.refresh();
   const isUserIgnored = createExclusionFilter(plugin.app);
   // Read per call, never captured: the list can change between two files
-  // of the same rebuild.
+  // of the same rebuild. `vaultWide`, not `current()`: this runs inside
+  // vault event handlers, and `current()` reads `AsyncLocalStorage`,
+  // which crashed Obsidian's renderer (Electron 43, Windows) when called
+  // during a rename started from the inline title.
   const ssIsExcluded = (path: string): boolean =>
-    isUserIgnored(path) || policyProvider.current().isExcluded(path);
+    isUserIgnored(path) || policyProvider.vaultWide.isExcluded(path);
 
   const ssExcerpt: ExcerptResolver = async (path, offset, maxLen) => {
     const f = plugin.app.vault.getAbstractFileByPath(path);
@@ -137,12 +191,15 @@ export async function wireSemanticSearch(
     return { excerpt: text.slice(offset, offset + maxLen), line };
   };
 
-  const pluginDir =
-    plugin.manifest.dir ??
-    `${plugin.app.vault.configDir}/plugins/${plugin.manifest.id}`;
+  const pluginDir = deps.baseDir;
 
+  // Every write to the index folder (the v1 migration and the stale-store
+  // wipe) waits for the indexer gate when there is one: a second process
+  // must not rewrite a store that the live owner is writing.
+  const gated = deps.indexerGate !== undefined;
+  const migrate = (): Promise<void> => migrateV1FlatStore(ssAdapter, pluginDir);
   // Migrate v1 flat store before constructing any registry entry.
-  await migrateV1FlatStore(ssAdapter, pluginDir);
+  if (!gated) await migrate();
 
   // One cheap probe per provider replaces the three eager store
   // loads this block used to do (stale-version JSON parse, native
@@ -153,21 +210,31 @@ export async function wireSemanticSearch(
   const embeddingsBaseDir = `${pluginDir}/embeddings`;
   const registry = createEmbeddingStoreRegistry(ssAdapter, embeddingsBaseDir);
   const { staleKeys: staleProviderKeys, probedCounts } =
-    await probeAndWipeStaleStores(registry, ssAdapter, embeddingsBaseDir);
-
-  if (staleProviderKeys.length > 0) {
-    const wipedCount = staleProviderKeys.length;
-    plugin.app.workspace.onLayoutReady(() => {
-      new Notice(
-        `MCP Tools: Semantic search index format upgraded (${wipedCount} provider${wipedCount > 1 ? "s" : ""} migrated). Rebuilding automatically.`,
-        8000,
-      );
-    });
+    await probeStores(registry);
+  const announceUpgrade = (wipedCount: number): void => {
+    deps.notify?.(
+      `MCP Tools: Semantic search index format upgraded (${wipedCount} provider${wipedCount > 1 ? "s" : ""} migrated). Rebuilding automatically.`,
+    );
+  };
+  if (!gated) {
+    await wipeStores(ssAdapter, embeddingsBaseDir, staleProviderKeys);
+    if (staleProviderKeys.length > 0) {
+      const wipedCount = staleProviderKeys.length;
+      plugin.app.workspace.onLayoutReady(() => announceUpgrade(wipedCount));
+    }
   }
 
   // Native MiniLM — always available (store loads lazily).
+  const beforeLoad = deps.beforeModelLoad;
+  const nativeInner: PipelineFactoryWithProgress = beforeLoad
+    ? async (model, onProgress, opts) => {
+        await beforeLoad();
+        return realPipelineFactory(model, onProgress, opts);
+      }
+    : realPipelineFactory;
   const nativeDownloader = createModelDownloader({
-    innerFactory: realPipelineFactory,
+    innerFactory: nativeInner,
+    ...(deps.nativeDtype !== undefined ? { dtype: deps.nativeDtype } : {}),
   });
   // Construction-time read: toggling the setting takes effect at
   // the next plugin reload (the settings UI says so).
@@ -178,6 +245,7 @@ export async function wireSemanticSearch(
     pipelineFactory: nativeDownloader.factory,
     maxInputTokens: NATIVE_MAX_INPUT_TOKENS,
     unloadWhenIdle: semanticPrefs.unloadModelWhenIdle === true,
+    ...(deps.embedBatching ? { batching: deps.embedBatching } : {}),
   });
   const nativeEp = createNativeEmbeddingProvider(embedder);
   const nativeStore = registry.storeFor("native-minilm-l6-v2", 384);
@@ -261,8 +329,26 @@ export async function wireSemanticSearch(
     state.indexer = indexer;
 
     let indexerStarted = false;
-    state.startIndexerIfNeeded = () => {
-      if (indexerStarted) return;
+    let closed = false;
+    // Memoized: the gated host's migration and wipe run once, ahead of
+    // the first start that the gate allows.
+    let storesPrepared: Promise<void> | undefined;
+    const prepareStores = (): Promise<void> => {
+      if (!gated) return Promise.resolve();
+      storesPrepared ??= (async () => {
+        await migrate();
+        // Probe again: the migration may have moved a store into place.
+        const probed = await probeStores(registry);
+        await wipeStores(ssAdapter, embeddingsBaseDir, probed.staleKeys);
+        state.probedCounts = probed.probedCounts;
+        if (probed.staleKeys.length > 0) {
+          announceUpgrade(probed.staleKeys.length);
+        }
+      })();
+      return storesPrepared;
+    };
+    const startIndexer = (): void => {
+      state.unavailableReason = undefined;
       indexerStarted = true;
       // #344: mark the build in-flight before kicking it off so a
       // search_vault_smart call landing in this same tick already sees
@@ -271,16 +357,61 @@ export async function wireSemanticSearch(
       // signal.
       state.nativeIndexBuildInProgress = true;
       state.nativeIndexBuildStartedAt = Date.now();
-      indexer
-        .start()
-        .catch((err) => {
+      // The first pass prunes records of files missing from the vault
+      // listing, so it must not run on a partial listing. A search can
+      // reach here before Obsidian has finished listing the vault.
+      prepareStores()
+        .then(
+          () =>
+            new Promise<void>((resolve) =>
+              plugin.app.workspace.onLayoutReady(resolve),
+            ),
+        )
+        .then(() => (closed ? undefined : indexer.start()))
+        .catch(async (err) => {
           logger.error("semantic-search: indexer start failed", {
             error: err instanceof Error ? err.message : String(err),
           });
+          // Let the next search retry. A failed start (say, the model
+          // download with no network) must not disable search until
+          // restart. stop() first: start() returns at once on an indexer
+          // that still thinks it is running, so a retry would build
+          // nothing. Partial progress is flushed and kept.
+          await indexer.stop().catch(() => {});
+          indexerStarted = false;
         })
         .finally(() => {
           state.nativeIndexBuildInProgress = false;
         });
+    };
+    const applyGate = (gate: IndexerGateResult | undefined): void => {
+      if (gate && !gate.ok) {
+        state.unavailableReason = gate.reason;
+        return;
+      }
+      // A gate that answered after teardown must not start anything.
+      if (closed) return;
+      startIndexer();
+    };
+    let gating: Promise<void> | undefined;
+    state.startIndexerIfNeeded = () => {
+      if (indexerStarted || closed) return;
+      // Searches arriving while an async gate is deciding wait for it.
+      if (gating) return gating;
+      const gate = deps.indexerGate?.();
+      if (!(gate instanceof Promise)) {
+        applyGate(gate);
+        return;
+      }
+      gating = gate
+        .then(applyGate, (err: unknown) => {
+          const message = err instanceof Error ? err.message : String(err);
+          state.unavailableReason = `Semantic search is unavailable: ${message}`;
+        })
+        .finally(() => {
+          gating = undefined;
+        });
+      return gating;
     };
 
     // Language detection for multilingual provider suggestion (fire-and-forget).
@@ -433,7 +564,7 @@ export async function wireSemanticSearch(
     if (activeRegistryKey && staleProviderKeys.includes(activeRegistryKey)) {
       plugin.app.workspace.onLayoutReady(() => {
         if (activeRegistryKey === "native-minilm-l6-v2") {
-          state.startIndexerIfNeeded?.();
+          void state.startIndexerIfNeeded?.();
         } else {
           state.startRebuildFor?.(activeRegistryKey);
         }
@@ -453,6 +584,12 @@ export async function wireSemanticSearch(
     };
 
     state.teardown = async () => {
+      closed = true;
+      // A migration or wipe in flight finishes first: the caller (the
+      // headless server) frees its lock once teardown resolves, and a
+      // write after that would hit a store the next owner is using.
+      // It is local file work, so the wait is short.
+      await storesPrepared?.catch(() => {});
       if (indexerStarted) {
         try {
           await indexer.stop();
@@ -554,6 +691,16 @@ export async function probeAndWipeStaleStores(
   staleKeys: ProviderKey[];
   probedCounts: Partial<Record<ProviderKey, number>>;
 }> {
+  const probed = await probeStores(registry);
+  await wipeStores(adapter, baseDir, probed.staleKeys);
+  return probed;
+}
+
+/** The read-only half: which stores are stale, and the counts of current ones. */
+async function probeStores(registry: EmbeddingStoreRegistry): Promise<{
+  staleKeys: ProviderKey[];
+  probedCounts: Partial<Record<ProviderKey, number>>;
+}> {
   const staleKeys: ProviderKey[] = [];
   const probedCounts: Partial<Record<ProviderKey, number>> = {};
   for (const key of ALL_PROVIDER_KEYS) {
@@ -566,7 +713,15 @@ export async function probeAndWipeStaleStores(
       probedCounts[key] = probed.recordCount;
     }
   }
+  return { staleKeys, probedCounts };
+}
 
+/** The destructive half: remove every file of the given stale stores. */
+async function wipeStores(
+  adapter: VaultAdapter,
+  baseDir: string,
+  staleKeys: readonly ProviderKey[],
+): Promise<void> {
   for (const key of staleKeys) {
     const dirPath = `${baseDir}/${key}`;
     try {
@@ -596,6 +751,4 @@ export async function probeAndWipeStaleStores(
       });
     }
   }
-
-  return { staleKeys, probedCounts };
 }
