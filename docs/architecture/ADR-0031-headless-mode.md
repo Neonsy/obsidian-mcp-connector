@@ -21,10 +21,12 @@ What stood in the way was structural: the composition root, the transport setup 
 1. **One shared tool set, registered twice.**
    `registerVaultTools` holds the tools that need only a vault-shaped `App` and a settings host.
    The desktop `registerTools` calls it and then registers the desktop-only tools, so the desktop tool set is unchanged.
-   Headless registers the shared set alone: 45 tools plus the three adaptive-loading meta-tools.
+   Headless registers the shared set alone: 49 tools plus the three adaptive-loading meta-tools.
    `search_vault_smart` is part of the shared set behind an option: the desktop passes it, and headless passes it unless `--no-semantic` is given (see decision 9).
    `rename_vault_file` and `search_files_by_name` are part of that set and run their desktop code unchanged (see decision 8).
-   Excluded in v1: `fetch`, daily and periodic notes, and every workspace, active-file, command, Dataview, Templater and bookmark tool.
+   The set includes `fetch` and the three periodic-note tools (decisions 10 to 12).
+   Not served: every workspace, active-file, command, Dataview, Templater and bookmark tool.
+   The desktop registers `fetch` and the periodic-note tools among the shared ones, so its `tools/list` order changes and its tool set does not.
 2. **Structural host, injected registrar.**
    `composeToolRegistry`, `createMcpService` and the transport setup take a registrar and a host with `app`, `manifest`, `loadData` and `saveData` instead of the plugin class.
    The server `instructions` text is a parameter, so headless does not advertise tools it lacks.
@@ -39,7 +41,8 @@ What stood in the way was structural: the composition root, the transport setup 
 4. **Confinement.**
    Every path is normalised (no `..`, absolute paths, NUL bytes or dot-segments) and joined on the realpath of the vault root, taken once at startup.
    Symlinks inside the vault are ignored: they are not indexed, and a path through one is refused.
-   Dot-folders are not indexed, read or written.
+   Dot-folders are not indexed, read or written by the vault or any tool.
+   The server's own startup read of a few settings files in `.obsidian` is the one exception (decision 10).
    Host paths are stripped from error messages.
 5. **Own metadata parser.**
    A line-oriented parser produces the `CachedMetadata` fields the tools read, and a link resolver reproduces `getFirstLinkpathDest` and `resolveSubpath`.
@@ -88,7 +91,7 @@ What stood in the way was structural: the composition root, the transport setup 
    The rest of the block stays byte for byte as it was, and edits that would overlap fail the note instead of corrupting it.
    Each new link text is parsed back and resolved before it is written, and a link that no spelling leads back to its target (such as a relative link to a file left in a folder named `a#b`) is left as it was and named in the error below.
    If the move succeeds and a note then fails to rewrite, the move stands and the error names the notes left out of date.
-   Limits: links in canvases and `.base` files are not rewritten, the link style comes from each link and not from `.obsidian/app.json` (dot-folders are never read), a link that did not resolve before the move is left as written, and on a filesystem without hard links a save landing at the destination in the instant before the move can be replaced.
+   Limits: links in canvases and `.base` files are not rewritten, the link style comes from each link and not from Obsidian's link settings (no headless path writes a link from them, so none are read), a link that did not resolve before the move is left as written, and on a filesystem without hard links a save landing at the destination in the instant before the move can be replaced.
    There is no transaction across the move and the rewrites, and a change the operating system has not yet reported to the watcher when the rename starts is not seen.
 
 9. **Semantic search runs on the desktop feature code, with host seams.**
@@ -112,12 +115,54 @@ What stood in the way was structural: the composition root, the transport setup 
    - **Stale entries are pruned.** Once the host reports the vault listing ready, a full pass of the shared indexer drops stored paths that are no longer in the vault, so a file renamed or deleted while no server ran stops being returned. Files that still exist but are excluded stay, as before. This also changes the desktop.
    - **Limits.** CPU only. The desktop's other providers and its settings screen do not exist here. An index is not shared with the plugin, and q8 scores differ slightly from the plugin's native scores. Peak memory is about 0.5 GB with the model loaded. Indexing uses one core for as long as it runs, and a call to another tool can wait for the chunk being embedded, which in our measurement on a 50-note vault was up to about 0.4 s while indexing and 0.6 s once while the model loaded.
 
+10. **The vault's Obsidian settings are read once at startup.**
+    `createHeadlessApp` reads `.obsidian/app.json` and the periodic-note files below before the first scan, through one reader (`vaultSettings.ts`).
+    The reader follows no symlink (a symlink at any level between the vault root and the file, such as `.obsidian` or `.obsidian/plugins/calendar`, counts as missing), refuses a file over 1 MB and parses JSON.
+    A missing file means Obsidian's defaults and an invalid one means the same, with one line on stderr naming the file.
+    Nothing watches `.obsidian`, so a changed setting needs a restart.
+    The tools still never touch dot-folders.
+    `userIgnoreFilters` gives `metadataCache.isUserIgnored(path)` real behavior, which every tool and the semantic indexer already reach through `createExclusionFilter`.
+    An entry wrapped in slashes (`/regex/`) is a regular expression tested on the vault-relative path, any other entry is a path prefix, and an empty entry, an empty expression or an invalid expression matches nothing.
+    The match is case sensitive.
+    Obsidian's own implementation is not public, so this follows its documented behavior and was not compared against it.
+    The setting hides files from the tools that honour it on desktop, and the files stay in the vault and in `list_vault_files`, as on desktop.
+    `useMarkdownLinks` and `newLinkFormat` are not read because nothing in the shared or headless path generates link text from settings.
+    `rename_vault_file` keeps each link's own style (decision 8) and `ensure_block_id` returns a wikilink as on desktop.
+
+11. **Periodic notes run the desktop tools over a headless backend.**
+    The three tools and `periodicNotesDetector` are unchanged apart from one seam.
+    On desktop the detector calls `obsidian-daily-notes-interface`, which reads `window.app` for the core Daily notes plugin, the Periodic Notes plugin and the Calendar plugin.
+    An `App` that carries a `periodicNotesBackend` gets the backend that function builds for the `App` of the call in place of the library, and the desktop `App` has none.
+    `createHeadlessApp` attaches a builder over the vault's files.
+    The backend reads the template and creates the folders and the note through the `App` the tool received, which is the guarded one, so excluded folders apply as for every other tool: a template in an excluded folder reads as missing (an empty note), and a note whose folder is excluded is refused before anything is written.
+    `core-plugins.json` (a list of enabled ids or a map of flags) and `daily-notes.json` describe the core plugin.
+    `community-plugins.json` says whether Periodic Notes and Calendar are enabled, and their `data.json` files under `plugins/` hold their settings.
+    A plugin that is not enabled, or a file that is missing or invalid, counts as off, and with no plugin on for a period the detector's own fallback applies (an empty note named by ISO date at the vault root).
+    The backend repeats the library's rules: which plugin serves a period, an enabled Periodic Notes section over the core plugin's options and Calendar's for weekly notes, its defaults (including the locale week format `gggg-[W]ww` when a weekly format is empty), trimmed folders and templates, and the order of its template passes.
+    A test runs the installed library (frozen at 0.9.4) against a minimal fake host and compares paths, settings and template output with the backend for all five periods, so a change to either side shows up.
+    A template is read from the vault by link resolution, as the library does, so a template in a dot-folder is not found and a template that cannot be read gives an empty note.
+    Only `{{date}}`, `{{time}}`, `{{title}}`, `{{yesterday}}`, `{{tomorrow}}`, their offset and format forms, and the weekday placeholders of weekly notes are substituted.
+    No template engine runs, so Templater syntax stays as written.
+    A new note is created through the headless vault with the parent folders made first.
+    Time is the host's timezone, and week-based tokens use the English calendar (Sunday starts the week), because there is no Obsidian language setting to follow.
+
+12. **`fetch` runs over a `requestUrl` backed by Node's `fetch`.**
+    The shim exports a `requestUrl` with the response the tool reads (`status`, lower-cased `headers`, `arrayBuffer`, `text`, `json`), `throw: false`, and an error with `status` and the message `Request failed, status N` for a status of 400 or more.
+    Redirects are followed.
+    The tool itself is the desktop one.
+    Its guard still applies (http and https only, no localhost, link-local or private network host literals), and so do its 30 second race and its output cap.
+    The guard looks at the URL given, not at where a redirect or a DNS answer leads, which is the desktop's limit as well.
+    The one change to the tool is `globalThis.setTimeout` in place of `window.setTimeout`, with the same effect on desktop.
+    Turndown resolves to its Node build in the CommonJS bundle and uses its bundled `domino` document, a dependency Turndown already has, so nothing new is added (the bundle grows by about 0.3 MB).
+    The body is read whole, as the desktop does, so a very large page costs memory in the server.
+    Node sends its own user agent where Obsidian sends a browser one.
+
 ## Consequences
 
 - Tool names and response shapes stay identical, so client integrations carry over.
 - The parser and the link resolver are approximations of Obsidian's.
   Differences show up in edge cases such as setext headings, footnotes and unusual tag forms, and the tests pin the behaviour the tools rely on.
-- The "Excluded files" setting has no equivalent (so `search_files_by_name` omits nothing), and `get_server_info` reports a loopback endpoint, which is correct because headless binds `127.0.0.1` only.
+- The "Excluded files" setting applies from startup (decision 10), and `get_server_info` reports a loopback endpoint, which is correct because headless binds `127.0.0.1` only.
 - Semantic search is part of the shared set (decision 9). Its limits are listed there.
 - The shared seams add a type parameter to the composition root and the transport setup, and the desktop tests pass the registrar explicitly.
 - The `tools/list` order on desktop now lists the shared tools first and the desktop-only tools after them, and `search_vault_smart` sits among the shared ones.

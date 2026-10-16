@@ -41,23 +41,10 @@ import {
   executeObsidianCommandHandler,
   executeObsidianCommandSchema,
 } from "./tools/executeObsidianCommand";
-import { fetchHandler, fetchSchema } from "./tools/fetch";
 import {
   executeTemplateHandler,
   executeTemplateSchema,
 } from "./tools/executeTemplate";
-import {
-  getOrCreateDailyNoteHandler,
-  getOrCreateDailyNoteSchema,
-} from "./tools/getOrCreateDailyNote";
-import {
-  getOrCreatePeriodicNoteHandler,
-  getOrCreatePeriodicNoteSchema,
-} from "./tools/getOrCreatePeriodicNote";
-import {
-  appendToPeriodicNoteHandler,
-  appendToPeriodicNoteSchema,
-} from "./tools/appendToPeriodicNote";
 import {
   executeDataviewQueryHandler,
   executeDataviewQuerySchema,
@@ -148,22 +135,7 @@ export async function registerTools(
       plugin: ctx.plugin,
     }),
   );
-  // Periodic notes
-  registry.register(getOrCreateDailyNoteSchema, async ({ arguments: args }) =>
-    getOrCreateDailyNoteHandler({ arguments: args, app: ctx.app }),
-  );
-  registry.register(
-    getOrCreatePeriodicNoteSchema,
-    async ({ arguments: args }) =>
-      getOrCreatePeriodicNoteHandler({ arguments: args, app: ctx.app }),
-  );
-  registry.register(appendToPeriodicNoteSchema, async ({ arguments: args }) =>
-    appendToPeriodicNoteHandler({ arguments: args, app: ctx.app }),
-  );
-  // Misc
-  registry.register(fetchSchema, async ({ arguments: args }) =>
-    fetchHandler({ arguments: args }),
-  );
+  // Templates
   registry.register(executeTemplateSchema, async ({ arguments: args }) =>
     executeTemplateHandler({
       arguments: args,

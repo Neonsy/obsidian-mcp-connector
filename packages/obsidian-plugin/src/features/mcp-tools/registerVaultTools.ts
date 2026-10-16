@@ -164,6 +164,20 @@ import {
   connectCanvasNodesSchema,
 } from "./tools/connectCanvasNodes";
 
+import { fetchHandler, fetchSchema } from "./tools/fetch";
+import {
+  getOrCreateDailyNoteHandler,
+  getOrCreateDailyNoteSchema,
+} from "./tools/getOrCreateDailyNote";
+import {
+  getOrCreatePeriodicNoteHandler,
+  getOrCreatePeriodicNoteSchema,
+} from "./tools/getOrCreatePeriodicNote";
+import {
+  appendToPeriodicNoteHandler,
+  appendToPeriodicNoteSchema,
+} from "./tools/appendToPeriodicNote";
+
 export type RegisterVaultToolsContext = {
   app: App;
   plugin: PluginDataLike;
@@ -183,7 +197,9 @@ export type RegisterVaultToolsContext = {
 
 /**
  * The tools that need nothing but a vault-shaped `App` and a settings
- * host: no workspace, commands, Dataview, Templater or UI. The desktop
+ * host: no workspace, commands, Dataview, Templater or UI. (`fetch` needs
+ * only `requestUrl`, and the periodic-note tools a vault, which a host
+ * without Obsidian supplies through `app.periodicNotesBackend`.) The desktop
  * `registerTools` calls this and adds the desktop-only tools; the
  * headless server registers this set alone. Kept free of Svelte, Modal
  * and settings-UI imports so the headless bundle never reaches them.
@@ -343,6 +359,22 @@ export async function registerVaultTools(
   );
   registry.register(deleteCanvasNodeSchema, async ({ arguments: args }) =>
     deleteCanvasNodeHandler({ arguments: args, app: ctx.app }),
+  );
+  // Periodic notes
+  registry.register(getOrCreateDailyNoteSchema, async ({ arguments: args }) =>
+    getOrCreateDailyNoteHandler({ arguments: args, app: ctx.app }),
+  );
+  registry.register(
+    getOrCreatePeriodicNoteSchema,
+    async ({ arguments: args }) =>
+      getOrCreatePeriodicNoteHandler({ arguments: args, app: ctx.app }),
+  );
+  registry.register(appendToPeriodicNoteSchema, async ({ arguments: args }) =>
+    appendToPeriodicNoteHandler({ arguments: args, app: ctx.app }),
+  );
+  // Misc
+  registry.register(fetchSchema, async ({ arguments: args }) =>
+    fetchHandler({ arguments: args }),
   );
   // Search
   registry.register(searchFilesByNameSchema, async ({ arguments: args }) =>

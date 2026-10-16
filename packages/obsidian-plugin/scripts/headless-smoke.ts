@@ -16,6 +16,13 @@
  *     bounded deadline derived from the watcher debounce;
  *   - file-name search finds a note, and renaming a note rewrites the links
  *     to it in another note;
+ *   - the vault's `.obsidian` settings apply: a path in "Excluded files" is
+ *     hidden from file-name search, and the daily note tool creates its note
+ *     in the configured folder from the configured template, which
+ *     `append_to_periodic_note` then extends;
+ *   - `fetch` converts a page served by a local HTTP server to Markdown. The
+ *     tool refuses loopback addresses, so the server process gets a preload
+ *     that sends requests for a made-up host to the local server;
  *   - closing stdin exits 0.
  * Then the install the README gives: the file copied under an extensionless
  * name into a folder with no package.json and run through its shebang,
@@ -33,6 +40,8 @@
  * cache is never read or written.
  */
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { createServer, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
 import {
   chmodSync,
   copyFileSync,
@@ -64,11 +73,23 @@ const ROOT_NAME = "obsidian-mcp-connector";
 const DESKTOP_ONLY = [
   "get_active_file",
   "execute_obsidian_command",
-  "fetch",
-  "get_or_create_daily_note",
   "execute_template",
   "execute_dataview_query",
 ];
+
+/** The tools that came with desktop parity: periodic notes and `fetch`. */
+const PARITY_TOOLS = [
+  "fetch",
+  "get_or_create_daily_note",
+  "get_or_create_periodic_note",
+  "append_to_periodic_note",
+];
+
+/** A host the fetch tool accepts, which the preload sends to the local server. */
+const FETCH_HOST = "http://pages.example";
+
+const PAGE_HTML =
+  "<html><body><h1>Smoke page</h1><p>Hello <b>world</b></p></body></html>";
 
 let failures = 0;
 function check(name: string, ok: boolean, detail?: unknown): void {
@@ -169,8 +190,48 @@ class StdioClient {
   }
 }
 
-async function stdioChecks(vault: string): Promise<void> {
-  const client = new StdioClient(["node", BUNDLE, vault]);
+/** A local HTTP server that serves one page. Closed by the caller. */
+async function startPageServer(): Promise<{ server: Server; base: string }> {
+  const server = createServer((req, res) => {
+    if (req.url === "/page") {
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      res.end(PAGE_HTML);
+    } else {
+      res.writeHead(404);
+      res.end("missing");
+    }
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  return {
+    server,
+    base: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
+  };
+}
+
+/** Preload that sends every fetch to the local page server, whatever the host. */
+function writeFetchPreload(workDir: string): string {
+  const file = join(workDir, "fetch-redirect.cjs");
+  writeFileSync(
+    file,
+    [
+      "const real = globalThis.fetch;",
+      "const target = process.env.SMOKE_FETCH_TARGET;",
+      "globalThis.fetch = (input, init) => {",
+      "  const url = new URL(String(input));",
+      "  return real(target + url.pathname + url.search, init);",
+      "};",
+      "",
+    ].join("\n"),
+  );
+  return file;
+}
+
+async function stdioChecks(
+  vault: string,
+  env: NodeJS.ProcessEnv,
+  pageBase: string,
+): Promise<void> {
+  const client = new StdioClient(["node", BUNDLE, vault], env);
   try {
     const init = await client.request("initialize", {
       protocolVersion: "2025-06-18",
@@ -197,6 +258,12 @@ async function stdioChecks(vault: string): Promise<void> {
     check(
       "stdio: search_vault_smart is served",
       names.includes("search_vault_smart"),
+    );
+    const missing = PARITY_TOOLS.filter((n) => !names.includes(n));
+    check(
+      "stdio: periodic note tools and fetch are served",
+      missing.length === 0,
+      missing,
     );
     check(
       "stdio: file-name search and rename are served",
@@ -256,6 +323,65 @@ async function stdioChecks(vault: string): Promise<void> {
       "stdio: rename_vault_file rewrote the link in another note",
       linker.includes("[[Renamed]]") && !linker.includes("[[Note]]"),
       linker,
+    );
+
+    const hidden = await client.tool("search_files_by_name", {
+      query: "hidden",
+    });
+    check(
+      "stdio: a path in Excluded files is hidden from search",
+      !hidden.includes("Ignored/Hidden.md") && !hidden.includes("isError"),
+      hidden,
+    );
+    const shown = await client.tool("search_files_by_name", {
+      query: "visible",
+    });
+    check(
+      "stdio: a path outside Excluded files is still found",
+      shown.includes("Visible.md"),
+      shown,
+    );
+
+    const daily = await client.tool("get_or_create_daily_note", {
+      date: "2026-03-15",
+    });
+    check(
+      "stdio: daily note is created in the configured folder from its template",
+      daily.includes('"path":"Journal/2026-03-15.md"') &&
+        daily.includes('"created":true') &&
+        daily.includes("# 2026-03-15"),
+      daily,
+    );
+    const appended = await client.tool("append_to_periodic_note", {
+      date: "2026-03-15",
+      content: "- smoke entry",
+    });
+    check(
+      "stdio: append_to_periodic_note extends the existing daily note",
+      appended.includes('"appended":true') &&
+        appended.includes('"created":false'),
+      appended,
+    );
+    const dailyFile = await client.tool("get_vault_file", {
+      path: "Journal/2026-03-15.md",
+    });
+    check(
+      "stdio: the daily note holds the template and the appended line",
+      dailyFile.includes("# 2026-03-15") && dailyFile.includes("- smoke entry"),
+      dailyFile,
+    );
+
+    const page = await client.tool("fetch", { url: `${FETCH_HOST}/page` });
+    check(
+      "stdio: fetch returns the page as Markdown",
+      page.includes("# Smoke page") && page.includes("Hello **world**"),
+      page,
+    );
+    const direct = await client.tool("fetch", { url: `${pageBase}/page` });
+    check(
+      "stdio: fetch still refuses a loopback address",
+      direct.includes("url_rejected"),
+      direct,
     );
 
     writeFileSync(join(vault, "External.md"), "Edited outside #ext-tag\n");
@@ -508,7 +634,33 @@ async function main(): Promise<void> {
       join(stdioVault, "Note.md"),
       "---\ntitle: Seed\n---\n# Note\nSeed body\n",
     );
-    await stdioChecks(stdioVault);
+    writeFileSync(join(stdioVault, "Visible.md"), "visible\n");
+    mkdirSync(join(stdioVault, "Ignored"));
+    writeFileSync(join(stdioVault, "Ignored/Hidden.md"), "hidden\n");
+    writeFileSync(join(stdioVault, "Daily.md"), "# {{title}}\n");
+    mkdirSync(join(stdioVault, ".obsidian"));
+    const settings = (name: string, value: unknown) =>
+      writeFileSync(join(stdioVault, ".obsidian", name), JSON.stringify(value));
+    settings("app.json", { userIgnoreFilters: ["Ignored/"] });
+    settings("core-plugins.json", ["daily-notes"]);
+    settings("daily-notes.json", { folder: "Journal", template: "Daily" });
+
+    const pages = await startPageServer();
+    const preload = writeFetchPreload(workDir);
+    try {
+      await stdioChecks(
+        stdioVault,
+        {
+          ...process.env,
+          NODE_OPTIONS:
+            `${process.env.NODE_OPTIONS ?? ""} --require ${preload}`.trim(),
+          SMOKE_FETCH_TARGET: pages.base,
+        },
+        pages.base,
+      );
+    } finally {
+      pages.server.close();
+    }
     await installedChecks(stdioVault, workDir);
     await noSemanticChecks(stdioVault);
 

@@ -6,10 +6,16 @@
  */
 
 import type { App } from "obsidian";
+import { logger } from "$/shared/logger";
 import { editFrontmatter } from "./frontmatterEdit";
 import { HeadlessVault, type HeadlessVaultOptions } from "./headlessVault";
 import { TFile, type TAbstractFile } from "./obsidianShim";
+import {
+  createPeriodicNotesBackend,
+  loadPeriodicNotesConfig,
+} from "./periodicNotes";
 import { createLinkRewriter } from "./renameLinks";
+import { createIgnoreMatcher, loadVaultSettings } from "./vaultSettings";
 import { VaultWatcher } from "./watcher";
 
 export class HeadlessFileManager {
@@ -105,16 +111,29 @@ export type HeadlessAppHandle = {
   close: () => void;
 };
 
+export type HeadlessAppOptions = HeadlessVaultOptions & {
+  /** Receives one line for each settings file that is present but unusable. */
+  warn?: (message: string) => void;
+};
+
 /**
  * Start watching the vault directory, index it, and return the app. The
  * watcher opens first and holds its events through the scan, so an edit
  * made while the scan runs is reconciled once it is done.
+ *
+ * The vault's Obsidian settings are read here, once: the "Excluded files"
+ * list and the daily and periodic note configuration. A change to them
+ * needs a restart.
  */
 export async function createHeadlessApp(
   vaultDir: string,
-  options: HeadlessVaultOptions = {},
+  options: HeadlessAppOptions = {},
 ): Promise<HeadlessAppHandle> {
-  const vault = await HeadlessVault.open(vaultDir, options);
+  const { warn = (message) => logger.warn(message), ...vaultOptions } = options;
+  const vault = await HeadlessVault.open(vaultDir, vaultOptions);
+  const settings = await loadVaultSettings(vault.root, warn);
+  vault.metadata.setUserIgnore(createIgnoreMatcher(settings.userIgnoreFilters));
+  const periodicConfig = await loadPeriodicNotesConfig(vault.root, warn);
   const watcher = new VaultWatcher(vault);
   watcher.start({ held: true });
   vault.flushPending = () => watcher.flush();
@@ -134,5 +153,11 @@ export async function createHeadlessApp(
     // to answer `dataview_not_installed`.
     plugins: { plugins: {} },
   } as unknown as App;
+  // The daily and periodic note tools read their settings and create notes
+  // through this instead of the desktop library (see periodicNotesDetector).
+  // It is built per call for the guarded `App` the tool receives.
+  Object.assign(app, {
+    periodicNotesBackend: createPeriodicNotesBackend(periodicConfig),
+  });
   return { app, vault, close: () => watcher.stop() };
 }

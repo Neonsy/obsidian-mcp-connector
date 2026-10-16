@@ -9,13 +9,13 @@ import { ensureParentFolderExists } from "$/features/mcp-tools/services/ensureFo
 // cannot load — the whole lib degrades to `any` there and every call
 // trips the no-unsafe-* rules. One boundary cast keeps call sites
 // typed in every environment.
-interface PeriodicNoteSettings {
+export interface PeriodicNoteSettings {
   folder?: string;
   format?: string;
   template?: string;
 }
 
-interface PeriodicNotesLibLike {
+export interface PeriodicNotesLibLike {
   appHasDailyNotesPluginLoaded(): boolean;
   appHasWeeklyNotesPluginLoaded(): boolean;
   appHasMonthlyNotesPluginLoaded(): boolean;
@@ -34,6 +34,22 @@ interface PeriodicNotesLibLike {
 }
 
 const lib = periodicNotesLib as unknown as PeriodicNotesLibLike;
+
+/**
+ * The seam for a host with no Obsidian runtime: an `App` that carries a
+ * `periodicNotesBackend` gets the backend it builds for the `App` of the
+ * call, instead of the library, which reads `window.app`. The backend
+ * reads and writes through that `App`, so the caller's guards apply. The
+ * desktop `App` has no such member.
+ */
+function backendOf(app: App): PeriodicNotesLibLike {
+  const forApp = (
+    app as unknown as {
+      periodicNotesBackend?: (app: App) => PeriodicNotesLibLike;
+    }
+  ).periodicNotesBackend;
+  return forApp ? forApp(app) : lib;
+}
 
 export type PeriodType =
   | "daily"
@@ -80,8 +96,9 @@ export function resolvePeriodicNote(
 ): ResolvedPeriodicNote {
   const dateStr = date ?? defaultIsoForPeriod(period);
   const m = parsePeriodicDate(period, dateStr);
-  const pluginOn = pluginLoadedFor(period);
-  const settings = pluginOn ? settingsFor(period) : null;
+  const backend = backendOf(app);
+  const pluginOn = pluginLoadedFor(backend, period);
+  const settings = pluginOn ? settingsFor(backend, period) : null;
   const path = computePath(period, m, settings);
 
   // Folder-vs-file guard via duck-type per `appendToVaultFile.ts` — and per
@@ -102,7 +119,7 @@ export function resolvePeriodicNote(
         // same settings + format we read above, applies the configured
         // template, and runs `{{date}}` / `{{title}}` interpolations.
         // Returned TFile lives at the same path the tool already exposed.
-        return await createForPeriod(period, m);
+        return await createForPeriod(backend, period, m);
       }
       // Fallback path: vault root + ISO format + empty file. Parent
       // folder is the vault root here (empty `settings.folder`), so the
@@ -119,7 +136,10 @@ export function resolvePeriodicNote(
 // Upstream `.d.ts` still only ships the daily surface; the full per-period
 // set is declared via augmentation in `src/types.ts`.
 
-function pluginLoadedFor(period: PeriodType): boolean {
+function pluginLoadedFor(
+  lib: PeriodicNotesLibLike,
+  period: PeriodType,
+): boolean {
   switch (period) {
     case "daily":
       return lib.appHasDailyNotesPluginLoaded();
@@ -134,7 +154,10 @@ function pluginLoadedFor(period: PeriodType): boolean {
   }
 }
 
-function settingsFor(period: PeriodType): PeriodicNoteSettings {
+function settingsFor(
+  lib: PeriodicNotesLibLike,
+  period: PeriodType,
+): PeriodicNoteSettings {
   switch (period) {
     case "daily":
       return lib.getDailyNoteSettings();
@@ -149,7 +172,11 @@ function settingsFor(period: PeriodType): PeriodicNoteSettings {
   }
 }
 
-function createForPeriod(period: PeriodType, m: MomentLike): Promise<TFile> {
+function createForPeriod(
+  lib: PeriodicNotesLibLike,
+  period: PeriodType,
+  m: MomentLike,
+): Promise<TFile> {
   switch (period) {
     case "daily":
       return lib.createDailyNote(m);

@@ -98,7 +98,7 @@ async function serveOverStdio(
   semantic: boolean,
 ): Promise<void> {
   routeConsoleToStderr();
-  const { app, close } = await createHeadlessApp(vaultDir);
+  const { app, close } = await createHeadlessApp(vaultDir, { warn: say });
   const host = createMemoryHost({ app, manifest: hostManifest });
   const search = semantic
     ? await startSemanticSearch(app, await fs.realpath(vaultDir), host)
@@ -157,7 +157,7 @@ async function serveOverHttp(
     return;
   }
 
-  const { app, close } = await createHeadlessApp(real);
+  const { app, close } = await createHeadlessApp(real, { warn: say });
   const host = await createFileHost({ app, manifest: hostManifest }, dataFile);
   const search = options.semantic
     ? await startSemanticSearch(app, real, host)

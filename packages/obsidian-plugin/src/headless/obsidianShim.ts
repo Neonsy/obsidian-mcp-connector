@@ -12,6 +12,7 @@ import moment from "moment";
 
 export { moment };
 export { resolveSubpath } from "./linkResolution";
+export { requestUrl } from "./requestUrl";
 export {
   parseFrontMatterAliases,
   prepareFuzzySearch,

@@ -588,7 +588,7 @@ Without `PATH`, give the absolute path of the file instead: `node /absolute/path
 
 ### What works
 
-These tools are served, 48 in all with the three adaptive-loading meta-tools (47 with `--no-semantic`):
+These tools are served, 52 in all with the three adaptive-loading meta-tools (51 with `--no-semantic`):
 
 - Files: `list_vault_files`, `get_vault_file`, `get_vault_files`, `get_vault_file_partial`, `create_vault_file`, `create_vault_binary_file`, `append_to_vault_file`, `patch_vault_file`, `delete_vault_file`, `rename_vault_file`, `create_vault_directory`, `delete_vault_directory`, `search_and_replace`, `get_file_info`, `list_attachments`, `get_recent_files`, `get_vault_overview`
 - Search: `search_files_by_name`, `search_vault_simple`, `search_vault_smart` (see [Semantic search](#semantic-search)), and `search_vault` with JsonLogic queries (a Dataview query returns `dataview_not_installed`)
@@ -596,13 +596,26 @@ These tools are served, 48 in all with the three adaptive-loading meta-tools (47
 - Structure and tasks: `get_note_outline`, `rename_heading`, `ensure_block_id`, `list_tasks`, `set_task_status`
 - Links: `get_outgoing_links`, `find_broken_links`, `get_backlinks`, `find_orphaned_notes`
 - Canvas: `get_canvas`, `add_canvas_node`, `connect_canvas_nodes`, `update_canvas_node`, `delete_canvas_node`
+- Periodic notes: `get_or_create_daily_note`, `get_or_create_periodic_note`, `append_to_periodic_note` (see [Vault settings](#vault-settings))
+- Web: `fetch`
 - Server and loading: `get_server_info`, `tool_catalog`, `activate_tool`, `activate_tools`
 
-Not served, because they need the desktop app or a plugin: `fetch`, the daily and periodic note tools, every workspace, active-file, command, Dataview, Templater and bookmark tool.
+Not served, because they need the desktop app or a plugin: every workspace, active-file, command, Dataview, Templater and bookmark tool.
 
-The server reads tags, links, headings, blocks and tasks with its own parser, which follows Obsidian's rules closely but is not Obsidian's. Edits made outside the server (an editor, a sync client, `git pull`) are picked up by a file watcher within a fraction of a second. Folders whose name starts with a dot, such as `.obsidian` and `.git`, are neither read nor written, and a path that leads outside the vault folder is refused. Symlinks inside the vault are ignored. A tool that trashes a file or folder moves it to `.trash/` in the vault. Obsidian's "Excluded files" setting does not apply.
+The server reads tags, links, headings, blocks and tasks with its own parser, which follows Obsidian's rules closely but is not Obsidian's. Edits made outside the server (an editor, a sync client, `git pull`) are picked up by a file watcher within a fraction of a second. Folders whose name starts with a dot, such as `.obsidian` and `.git`, are neither read nor written, and a path that leads outside the vault folder is refused. Symlinks inside the vault are ignored. A tool that trashes a file or folder moves it to `.trash/` in the vault.
 
 `search_files_by_name` ranks with its own fuzzy scorer, which follows Obsidian's quick switcher in spirit (in-order characters, contiguous runs and word starts rank higher) but gives different scores. `rename_vault_file` moves a file or folder and rewrites the links to it in every other note: wikilinks, embeds, markdown links (URL-encoded and `<angle bracket>` paths too) and frontmatter links, each keeping its own style, with subpaths and aliases intact. Relative links inside a moved note are recomputed so they still reach the same files. If the move succeeds but a note cannot be rewritten, the error names that note. Links inside canvases and `.base` files are not rewritten, and the link style is taken from each link, not from Obsidian's Files & Links settings.
+
+### Vault settings
+
+The server reads a few of the vault's Obsidian settings once, when it starts. A change to any of them needs a restart, and nothing watches `.obsidian`. A missing file, or one that is not valid JSON, means Obsidian's defaults (an invalid file is reported once on stderr). The tools themselves still never read or write dot-folders.
+
+- **Excluded files:** `userIgnoreFilters` in `.obsidian/app.json`. An entry is a path prefix (`Private/`) or, wrapped in slashes, a regular expression tested against the vault-relative path (`/\.png$/`). Excluded files stay in the vault but are left out of the tools that honour the setting in the plugin too, such as `search_files_by_name`, `list_tasks`, `list_attachments`, `get_recent_files` and semantic search. An invalid expression excludes nothing.
+- **Daily and periodic notes:** the tools create a note where the vault's settings say. The core Daily notes plugin is read from `.obsidian/core-plugins.json` and `.obsidian/daily-notes.json`. The Periodic Notes plugin is read from `.obsidian/community-plugins.json` and `.obsidian/plugins/periodic-notes/data.json`, and the Calendar plugin (weekly notes only) from `.obsidian/plugins/calendar/data.json`. A plugin counts only when it is enabled, with the same precedence as the plugin: an enabled Periodic Notes section replaces the core plugin's settings for that period. Folder, date format and template apply. With no plugin enabled, a note is created empty at the vault root, named by ISO date.
+- **Templates:** a template is a note in the vault, found the way Obsidian finds a link target. The server substitutes `{{date}}`, `{{time}}`, `{{title}}`, `{{yesterday}}`, `{{tomorrow}}` and the weekday placeholders of weekly notes, as the plugin does. It does not run Templater, so Templater syntax stays as written, and a template that cannot be read gives an empty note. A template inside a dot-folder cannot be read.
+- **Time:** dates and week numbers use the server's timezone and an English calendar, so weeks start on Sunday in `gggg-[W]ww` formats.
+
+`fetch` works as in the plugin, including its refusal of non-http(s) URLs and of localhost and private network addresses. It follows redirects and sends no browser headers.
 
 ### Semantic search
 
